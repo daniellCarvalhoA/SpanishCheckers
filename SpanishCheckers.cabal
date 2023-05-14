@@ -25,14 +25,19 @@ source-repository head
 
 library
   exposed-modules:
-      Lib
+      Game
+      Colors
+      GoBack
+      Render
   other-modules:
       Paths_SpanishCheckers
   hs-source-dirs:
       src
+      src/render
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
+    , gloss
   default-language: Haskell2010
 
 executable SpanishCheckers-exe
@@ -45,6 +50,7 @@ executable SpanishCheckers-exe
   build-depends:
       SpanishCheckers
     , base >=4.7 && <5
+    , gloss
   default-language: Haskell2010
 
 test-suite SpanishCheckers-test
@@ -58,4 +64,5 @@ test-suite SpanishCheckers-test
   build-depends:
       SpanishCheckers
     , base >=4.7 && <5
+    , gloss
   default-language: Haskell2010
