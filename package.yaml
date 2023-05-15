@@ -42,6 +42,7 @@ library:
     - src 
     - src/render
     - src/general
+    - src/human
 
 executables:
   SpanishCheckers-exe:

@@ -1,9 +1,12 @@
-{-# LANGUAGE InstanceSigs  #-}
+{-# LANGUAGE InstanceSigs    #-}
+{-# LANGUAGE LambdaCase      #-}
+{-# LANGUAGE RecordWildCards #-}
+
 module Game where
 
-import Data.Word (Word32, Word8)
-import Data.List.NonEmpty (NonEmpty)
-import Data.Bits ( Bits((.|.), shiftL, complement, popCount, bit) )
+import Data.Word          (Word32, Word8)
+import Data.List.NonEmpty (NonEmpty(..),(<|))
+import Data.Bits          ( Bits((.|.), shiftL, complement, popCount, bit) )
 
 data Game = Game {
     turn  :: Assoc
@@ -28,6 +31,14 @@ data Board = Board {
   , kdowns :: Word32
 } deriving Show
 
+cellsPerRow :: Word8
+cellsPerRow = 4
+
+nofCells :: Word8
+nofCells = 31 -- counting from 0
+
+nofRows :: Word8
+nofRows = 7  -- counting from 0
 
 -------------------------------------------
 ----- Cache gives the set of eaten pieces so far 
@@ -61,6 +72,27 @@ cachePawn i = Cache (bit j) 0 where j = fromIntegral i
 cacheKing :: Word8 -> Cache 
 cacheKing i = Cache 0 (bit j) where j = fromIntegral i 
 
+--------------
+-- Directions
+
+data Direction = NorthEast | NorhtWest | SouthWest | SouthEast 
+  deriving (Show, Bounded, Eq, Enum)
+
+class (Eq a, Bounded a, Enum a) => Rotate a where
+  next :: a -> a 
+  before :: a -> a 
+  around :: a -> [a]
+
+instance Rotate Direction where 
+  next   a | a == maxBound = minBound
+           | otherwise     = succ a 
+  before a | a == minBound = maxBound
+           | otherwise     = pred a 
+  around a = [a .. maxBound] <> init [minBound .. a]
+
+allowedDirections :: Direction -> [Direction]
+allowedDirections dir = [before dir, dir, next dir]
+
 ---------------------------------
 ------ Computer Move 
 --- # Computer and human have different move representations because the computer does not need 
@@ -92,6 +124,42 @@ data Memoize = Memoize {
     pawns :: Word8 
   , kings :: Word8
 }
+
+instance Eq Memoize where 
+  m1 == m2 = pawns m1 == pawns m2 && kings m1 == kings m2 
+
+instance Ord Memoize where 
+  (Memoize p1 k1) <= (Memoize p2 k2) 
+    | p1 + k1 == p2 + k2 = k1 <= k2 
+    | otherwise = p1 + k1 < p2 + k2
+
+instance Semigroup Memoize where
+  (Memoize p1 k1) <> (Memoize p2 k2) = Memoize (p1 + p2) (k1 + k2)
+
+instance Monoid Memoize where 
+  mempty = Memoize 0 0 
+
+memoize :: Memoize -> Eaten -> Memoize
+memoize Memoize{..} = \case 
+  P _ -> Memoize (1 + pawns) kings 
+  K _ -> Memoize pawns (1 + kings)
+
+mem :: Eaten -> Memoize
+mem = \case 
+  P _ -> Memoize 1 0 
+  K _ -> Memoize 0 1
+
+cons :: Eaten -> Word8 -> (Memoize, [Path]) -> (Memoize, [Path])
+cons eat x (m, p) = (memoize m eat, (Point x eat <|) <$> p)
+
+cons' :: Eaten -> Word8 -> (Cache, [Path]) -> (Cache, [Path])
+cons' eat x (c, p) = (addToCache c eat, (Point x eat <|) <$> p)
+
+addToCache :: Cache -> Eaten -> Cache 
+addToCache c = \case 
+  P w8 -> c <> cachePawn w8 
+  K w8 -> c <> cacheKing w8
+
 
 data HumanMove = Cons {
     root   :: Word8 
