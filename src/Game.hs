@@ -6,7 +6,7 @@ module Game where
 
 import Data.Word          (Word32, Word8)
 import Data.List.NonEmpty (NonEmpty(..),(<|))
-import Data.Bits          ( Bits((.|.), shiftL, complement, popCount, bit) )
+import Data.Bits          ( Bits(..) )
 
 data Game = Game {
     turn  :: Assoc
@@ -112,6 +112,14 @@ data ComputerMove = ComputerMove {
 instance Eq ComputerMove where 
   (==) :: ComputerMove -> ComputerMove -> Bool
   m1 == m2 = path m1 == path m2
+
+consM :: Cache -> Word8 -> (Cache, [ComputerMove]) -> (Cache, [ComputerMove])
+consM c n (c', mvs) = (c <> c', consM' c n <$> mvs)
+
+consM' :: Cache -> Word8 -> ComputerMove -> ComputerMove
+consM' c n ComputerMove{..} = ComputerMove n (c <> cache) (setBit path m) end 
+  where m = fromIntegral n 
+
 
 ---------------------------------
 -----

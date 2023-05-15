@@ -34,6 +34,7 @@ library
       HumanKingJump
       HumanPawnJump
       ComputerKingJump
+      ComputerPawnJump
   other-modules:
       Paths_SpanishCheckers
   hs-source-dirs:
