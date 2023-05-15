@@ -79,8 +79,8 @@ stops :: Cache -> Turn -> Word8 -> Board -> Direction -> State
 stops Cache{..} turn w8 board = \case 
   NorthEast -> let (is, e) = rudiagonal (pawn .|. king) turn w8 board 
                 in (is, e, NorthEast, removeFromBoard e board turn)
-  NorhtWest -> let (is, e) = ludiagonal (pawn .|. king) turn w8 board
-                in (is, e, NorhtWest, removeFromBoard e board turn)
+  NorthWest -> let (is, e) = ludiagonal (pawn .|. king) turn w8 board
+                in (is, e, NorthWest, removeFromBoard e board turn)
   SouthEast -> let (is, e) = rddiagonal (pawn .|. king) turn w8 board 
                 in (is, e, SouthEast, removeFromBoard e board turn)
   SouthWest -> let (is, e) = lddiagonal (pawn .|. king) turn w8 board 

@@ -75,7 +75,7 @@ cacheKing i = Cache 0 (bit j) where j = fromIntegral i
 --------------
 -- Directions
 
-data Direction = NorthEast | NorhtWest | SouthWest | SouthEast 
+data Direction = NorthEast | NorthWest | SouthWest | SouthEast 
   deriving (Show, Bounded, Eq, Enum)
 
 class (Eq a, Bounded a, Enum a) => Rotate a where
@@ -84,10 +84,13 @@ class (Eq a, Bounded a, Enum a) => Rotate a where
   around :: a -> [a]
 
 instance Rotate Direction where 
+  next :: Direction -> Direction
   next   a | a == maxBound = minBound
            | otherwise     = succ a 
+  before :: Direction -> Direction
   before a | a == minBound = maxBound
            | otherwise     = pred a 
+  around :: Direction -> [Direction]
   around a = [a .. maxBound] <> init [minBound .. a]
 
 allowedDirections :: Direction -> [Direction]
@@ -105,6 +108,10 @@ data ComputerMove = ComputerMove {
   , path  :: Word32 
   , end   :: Word8   
 } deriving Show 
+
+instance Eq ComputerMove where 
+  (==) :: ComputerMove -> ComputerMove -> Bool
+  m1 == m2 = path m1 == path m2
 
 ---------------------------------
 -----
@@ -126,17 +133,21 @@ data Memoize = Memoize {
 }
 
 instance Eq Memoize where 
+  (==) :: Memoize -> Memoize -> Bool
   m1 == m2 = pawns m1 == pawns m2 && kings m1 == kings m2 
 
 instance Ord Memoize where 
+  (<=) :: Memoize -> Memoize -> Bool
   (Memoize p1 k1) <= (Memoize p2 k2) 
     | p1 + k1 == p2 + k2 = k1 <= k2 
     | otherwise = p1 + k1 < p2 + k2
 
 instance Semigroup Memoize where
+  (<>) :: Memoize -> Memoize -> Memoize
   (Memoize p1 k1) <> (Memoize p2 k2) = Memoize (p1 + p2) (k1 + k2)
 
 instance Monoid Memoize where 
+  mempty :: Memoize
   mempty = Memoize 0 0 
 
 memoize :: Memoize -> Eaten -> Memoize
