@@ -2,7 +2,7 @@ module GoBack (goBack) where
 
 import Graphics.Gloss.Data.Color 
 import Graphics.Gloss.Data.Picture
-import Graphics.Gloss.Interface.IO.Display 
+-- import Graphics.Gloss.Interface.IO.Display 
 
 
 square :: Float -> Picture 

@@ -2,16 +2,14 @@ module Main where
 
 
 import Criterion.Main  
-import SimplePawn
+import SimpleMove
 import Game 
-
 
 main :: IO ()
 main = defaultMain [
 
     bgroup "simplepawnmove" [ 
-                              bench "hpm0" $ whnf (hsimplemove 10 ) initialboard 
-                            , bench "spm0" $ whnf (simplePawnMove 10 Human) initialboard 
+                              bench "spm0" $ whnf (simpleKingMove 10 ) initialboard 
                             ]
                    ]
 
