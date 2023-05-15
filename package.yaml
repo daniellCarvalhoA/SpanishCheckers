@@ -22,6 +22,8 @@ description:         Please see the README on GitHub at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - gloss
+- criterion
+
 
 ghc-options:
 - -Wall
@@ -38,7 +40,7 @@ library:
   source-dirs:  
     - src 
     - src/render
-   
+    - src/general
 
 executables:
   SpanishCheckers-exe:
@@ -56,6 +58,17 @@ tests:
   SpanishCheckers-test:
     main:                Spec.hs
     source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - SpanishCheckers
+
+benchmarks:
+  SpanishCheckers-bench:
+    main:                Main.hs
+    source-dirs:         bench
     ghc-options:
     - -threaded
     - -rtsopts

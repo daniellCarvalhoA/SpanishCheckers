@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
-module Render where
+
+module Render (renderState, GameState(..), Dimensions(..), buildInitialDim, disp) where
 
 import qualified Graphics.Gloss.Interface.IO.Game as G
 import qualified Graphics.Gloss.Interface.IO.Display as G
@@ -9,9 +10,6 @@ import Data.Bits
 import Colors
 import GoBack
 import Game
-import GHC.Num (Num(fromInteger))
-import GHC.Real (fromIntegral)
-
 
 data Dimensions = Dimensions {
     screenDimensions :: (Int, Int)

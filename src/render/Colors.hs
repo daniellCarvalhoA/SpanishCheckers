@@ -28,6 +28,3 @@ blackColor = makeColorI 30 17 3 255
 kingBlackColor :: Color 
 kingBlackColor = light blackColor
 
-disp = displayIO display playingCellColor (return blank) (const (return ()))
-    where 
-      display = InWindow "" (100, 100) (0, 0)
