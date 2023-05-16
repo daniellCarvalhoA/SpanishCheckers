@@ -1,7 +1,15 @@
 module GoBack (goBack) where 
 
-import Graphics.Gloss.Data.Color 
+import Graphics.Gloss.Data.Color ( Color, greyN ) 
 import Graphics.Gloss.Data.Picture
+    ( Picture,
+      color,
+      pictures,
+      polygon,
+      rectangleSolid,
+      rotate,
+      thickArc,
+      translate )
 -- import Graphics.Gloss.Interface.IO.Display 
 
 

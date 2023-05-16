@@ -5,7 +5,8 @@ module SimpleMove (
      , simpleKingMove
      ) where
 
-import Game             (Board(..), Turn (..))
+import Board            (Board(..))
+import Types            (Turn (..))
 import Utils            (rup, lup, rdp, ldp)
 import Data.Word        (Word8)
 import Data.List        (unfoldr)

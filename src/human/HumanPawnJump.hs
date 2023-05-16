@@ -3,7 +3,16 @@
 
 module HumanPawnJump (jumpPawnMove )where 
 
-import Game 
+import Types
+    ( Turn(..),
+      HumanMove(Cons),
+      Memoize,
+      Path,
+      Point(Point),
+      Eaten(..),
+      mem,
+      cons ) 
+import Board ( Board(..), cellsPerRow, nofCells, nofRows )
 import Data.Word          (Word8)
 import Data.Bits          (testBit)
 import Data.List.NonEmpty (NonEmpty(..))

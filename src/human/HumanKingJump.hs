@@ -4,11 +4,18 @@
 module HumanKingJump where 
 
 import Data.Bits          (testBit, setBit, clearBit, (.|.), popCount)
-import Game               ( Turn(..), Board(..), Eaten(..)
-                          , Direction(..), Cache(..), HumanMove(..)
-                          , cons', addToCache, Memoize(..)
-                          , allowedDirections, Point(..)
-                          )
+import Types
+    ( Turn(..),
+      HumanMove(Cons),
+      Memoize(Memoize),
+      Point(Point),
+      Eaten(..),
+      Direction(..),
+      Cache(..),
+      allowedDirections,
+      cons',
+      addToCache )
+import Board ( Board(..) )
 import Data.Word          (Word8, Word32) 
 import Data.List          (unfoldr)
 import Utils              ( leftDownAdj, leftUpAdj, rightDownAdj

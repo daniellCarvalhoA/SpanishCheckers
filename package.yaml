@@ -25,6 +25,7 @@ dependencies:
 - containers
 - criterion
 - extra
+- QuickCheck
 
 ghc-options:
 - -Wall
@@ -59,7 +60,7 @@ executables:
 
 tests:
   SpanishCheckers-test:
-    main:                Spec.hs
+    main:                Main.hs
     source-dirs:         test
     ghc-options:
     - -threaded

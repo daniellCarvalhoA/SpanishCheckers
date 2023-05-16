@@ -5,8 +5,8 @@
 module ComputerKingJump (kingJumpMove)  where 
 
 import Data.Bits (testBit, (.|.), xor, Bits (bit, setBit, clearBit))
-import Game      ( Cache(..), Turn(..), Board(..)
-                 , cacheKing, cachePawn, Direction (..), ComputerMove (..), allowedDirections, consM)
+import Types      ( Cache(..), Turn(..), cacheKing, cachePawn, Direction (..), ComputerMove (..), allowedDirections, consM)
+import Board (Board(..))
 import Data.Word (Word8)
 import Data.List (unfoldr, nub)
 import Utils     ( rightUpAdj, leftUpAdj, rightDownAdj, leftDownAdj, filterNullMap, concatFilter ) 

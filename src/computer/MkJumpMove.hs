@@ -1,9 +1,10 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 module MkJumpMove where 
-import Game
+import Types            ( Size(Pawn), Turn(..), ComputerMove(..), Cache(king, pawn) )
+import Board            (Board(..), swap, atLowerRow, atUpperRow )
 import Data.Tuple.Extra (both)
-import Data.Bits (Bits(..))
+import Data.Bits        (Bits(..))
 
 mkJumpMove :: Board -> Size -> ComputerMove -> Turn -> Board 
 mkJumpMove Board{..} size ComputerMove{..} = \case 
@@ -17,8 +18,8 @@ mkJumpMove Board{..} size ComputerMove{..} = \case
         (ups', kups') 
           | start == end                   = (ups, kups)
           | size == Pawn && atUpperRow end = (clearBit ups begin, setBit kups finish)
-          | size == Pawn                   = (swap ups (begin, finish), kups)
-          | otherwise                      = (ups, swap kups (begin, finish))
+          | size == Pawn                   = (swap ups (finish, begin), kups)
+          | otherwise                      = (ups, swap kups (finish, begin))
      in Board empties ups' downs' kups' kdowns' 
   Computer -> 
     let (begin, finish) = both fromIntegral (start, end)
@@ -30,8 +31,8 @@ mkJumpMove Board{..} size ComputerMove{..} = \case
         (downs', kdowns') 
           | start == end                   = (downs, kdowns)
           | size == Pawn && atLowerRow end = (clearBit downs begin, setBit kdowns finish)
-          | size == Pawn                   = (swap downs (begin, finish), kdowns)
-          | otherwise                      = (downs, swap kdowns (begin, finish))
+          | size == Pawn                   = (swap downs (finish, begin), kdowns)
+          | otherwise                      = (downs, swap kdowns (finish, begin))
      in Board empties ups' downs' kups' kdowns'
 
 ----------------------
@@ -39,33 +40,33 @@ mkJumpMove Board{..} size ComputerMove{..} = \case
 
 rvJumpMove :: Board -> Size -> ComputerMove -> Turn -> Board 
 rvJumpMove Board{..} size ComputerMove{..} = \case 
-  Human ->
+  Computer ->
     let (begin, finish) = both fromIntegral (start, end)
         downs'          = downs  .|. pawn cache 
         kdowns'         = kdowns .|. king cache
         es              = emptys `xor` pawn cache `xor` king cache 
         empties | start == end = es 
                 | otherwise    = if testBit (pawn cache .|. king cache) finish
-                                    then clearBit (clearBit es begin) finish 
+                                    then clearBit (clearBit es begin) begin
                                     else swap es (finish, begin) 
         (ups', kups')
           | start == end                   = (ups, kups)
           | size == Pawn && atUpperRow end = (setBit ups begin, clearBit kups finish)
-          | size == Pawn                   = (swap ups (finish, begin), kups)
-          | otherwise                      = (ups, swap kups (finish, begin))
+          | size == Pawn                   = (swap ups (begin, finish), kups)
+          | otherwise                      = (ups, swap kups (begin, finish))
      in Board empties ups' downs' kups' kdowns' 
-  Computer -> 
+  Human -> 
     let (begin, finish) = both fromIntegral (start, end)
-        ups'            = downs  .|. pawn cache 
-        kups'           = kdowns .|. king cache
+        ups'            = ups  .|. pawn cache 
+        kups'           = kups .|. king cache
         es              = emptys `xor` pawn cache `xor` king cache 
         empties | start == end = es 
                 | otherwise    = if testBit (pawn cache .|. king cache) finish
-                                   then clearBit (clearBit es begin) finish 
+                                   then clearBit (clearBit es begin) begin
                                    else swap es (finish, begin)
         (downs', kdowns') 
           | start == end                   = (downs, kdowns)
           | size == Pawn && atLowerRow end = (setBit downs begin, clearBit kdowns finish)
-          | size == Pawn                   = (swap downs (finish, begin), kdowns)
-          | otherwise                      = (downs, swap kdowns (finish, finish))
+          | size == Pawn                   = (swap downs (begin, finish), kdowns)
+          | otherwise                      = (downs, swap kdowns (begin, finish))
      in Board empties ups' downs' kups' kdowns'   

@@ -6,10 +6,22 @@ import qualified Graphics.Gloss.Interface.IO.Game as G
 import qualified Graphics.Gloss.Interface.IO.Display as G
 import qualified Graphics.Gloss.Interface.Environment as G
 import Data.Bifunctor (bimap)
-import Data.Bits
+import Data.Bits ( Bits(testBit) )
 import Colors
-import GoBack
-import Game
+    ( blackColor,
+      kingBlackColor,
+      kingWhiteColor,
+      nonCellColor,
+      playingCellColor,
+      whiteColor )
+import GoBack ( goBack )
+import Types
+    ( Color(Black, White),
+      Turn(Computer, Human),
+      Assoc,
+      )
+import Game (Game(..), initialGame)
+import Board (Board(..), groupAt)
 
 data Dimensions = Dimensions {
     screenDimensions :: (Int, Int)
@@ -29,14 +41,10 @@ renderState GameState{..} =
   $ G.pictures
   $ (<>[back]) $ concatMap addToPicture (zip [0..7] $ groupAt 8 [0 .. 63])
   where
-    addToPicture = row (turn game) (cellDimensions dims) (board game)
+    addToPicture = row (assoc game) (cellDimensions dims) (board game)
     back = G.translate (9.75 * cellDimensions dims) (3.5 * cellDimensions dims) 
          $ goBack G.white $ cellDimensions dims
 
-groupAt :: Int -> [a] -> [[a]]
-groupAt _ [] = []
-groupAt n xs = zs : groupAt n ys
-  where (zs, ys) = splitAt n xs
 
 
 row :: Assoc -> Float -> Board -> (Int, [Int]) -> [G.Picture]

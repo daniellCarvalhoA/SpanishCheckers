@@ -7,7 +7,7 @@ module Colors (
     , kingBlackColor
     ) where 
 
-import Graphics.Gloss.Data.Color
+import Graphics.Gloss.Data.Color ( Color, dark, light, makeColorI )
 
 nonCellColor :: Color
 nonCellColor = makeColorI 189 159 128 255

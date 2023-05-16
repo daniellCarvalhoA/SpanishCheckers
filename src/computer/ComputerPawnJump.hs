@@ -2,7 +2,8 @@
 {-# LANGUAGE LambdaCase #-}
 
 module ComputerPawnJump (jumpPawnMove) where 
-import Game (Board (..), cellsPerRow, Cache, nofRows, cachePawn, cacheKing, nofCells, Turn (..), ComputerMove (ComputerMove), consM)
+import Types (cachePawn, cacheKing, Cache(..), Turn (..), ComputerMove (ComputerMove), consM)
+import Board ( Board(..), cellsPerRow, nofCells, nofRows ) 
 import Data.Word (Word8)
 import Data.Bits (Bits(..))
 import Control.Arrow (second)
@@ -24,9 +25,6 @@ jumpPawnMove turn n board = start n mempty
         (Nothing,Just (c,t))        -> consM m i $ go t c 
         (Just (c,t),Nothing)        -> consM m i $ go t c 
         (Just (c1,t1),Just (c2,t2)) -> consM m i (go t1 c1 `append` go t2 c2)
-
-
-
 
 leftUpEat :: Board -> Word8 -> Maybe (Cache, Word8)
 leftUpEat Board{..} n 
