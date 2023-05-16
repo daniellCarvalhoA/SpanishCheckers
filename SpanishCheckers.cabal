@@ -29,12 +29,14 @@ library
       Colors
       GoBack
       Render
+      MkSimpleMove
       SimpleMove
       Utils
       HumanKingJump
       HumanPawnJump
       ComputerKingJump
       ComputerPawnJump
+      MkJumpMove
   other-modules:
       Paths_SpanishCheckers
   hs-source-dirs:

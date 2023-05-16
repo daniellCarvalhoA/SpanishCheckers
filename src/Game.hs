@@ -40,6 +40,15 @@ nofCells = 31 -- counting from 0
 nofRows :: Word8
 nofRows = 7  -- counting from 0
 
+swap :: Word32 -> (Int, Int) -> Word32
+swap es (begin, end) = clearBit (setBit es begin) end
+
+atLowerRow :: Word8 -> Bool 
+atLowerRow x = x `div` cellsPerRow == 0
+
+atUpperRow :: Word8 -> Bool 
+atUpperRow x = x `div` cellsPerRow == nofRows
+
 -------------------------------------------
 ----- Cache gives the set of eaten pieces so far 
 
