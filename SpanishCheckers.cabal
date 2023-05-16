@@ -48,6 +48,7 @@ library
       base >=4.7 && <5
     , containers
     , criterion
+    , extra
     , gloss
   default-language: Haskell2010
 
@@ -63,6 +64,7 @@ executable SpanishCheckers-exe
     , base >=4.7 && <5
     , containers
     , criterion
+    , extra
     , gloss
   default-language: Haskell2010
 
@@ -79,6 +81,7 @@ test-suite SpanishCheckers-test
     , base >=4.7 && <5
     , containers
     , criterion
+    , extra
     , gloss
   default-language: Haskell2010
 
@@ -95,5 +98,6 @@ benchmark SpanishCheckers-bench
     , base >=4.7 && <5
     , containers
     , criterion
+    , extra
     , gloss
   default-language: Haskell2010

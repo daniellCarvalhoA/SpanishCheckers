@@ -24,7 +24,7 @@ dependencies:
 - gloss
 - containers
 - criterion
-
+- extra
 
 ghc-options:
 - -Wall

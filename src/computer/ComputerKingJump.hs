@@ -6,7 +6,7 @@ module ComputerKingJump (kingJumpMove)  where
 
 import Data.Bits (testBit, (.|.), xor, Bits (bit, setBit, clearBit))
 import Game      ( Cache(..), Turn(..), Board(..)
-                 , cacheKing, cachePawn, Direction (..), ComputerMove (..), allowedDirections)
+                 , cacheKing, cachePawn, Direction (..), ComputerMove (..), allowedDirections, consM)
 import Data.Word (Word8)
 import Data.List (unfoldr, nub)
 import Utils     ( rightUpAdj, leftUpAdj, rightDownAdj, leftDownAdj, filterNullMap, concatFilter ) 
@@ -32,12 +32,6 @@ kingJumpMove turn board i = second nub begin
       Computer -> Board (setBit emptys j) ups downs kups (clearBit kdowns j)
       where j = fromIntegral i
 
-consM :: Cache -> Word8 -> (Cache, [ComputerMove]) -> (Cache, [ComputerMove])
-consM c n (c', mvs) = (c <> c', consM' c n <$> mvs)
-
-consM' :: Cache -> Word8 -> ComputerMove -> ComputerMove
-consM' c n ComputerMove{..} = ComputerMove n (c <> cache) (setBit path m) end 
-  where m = fromIntegral n 
 
 untilObstacle :: Turn -> (Word8 -> Maybe Word8) -> Word8 -> Board -> Maybe (Word8, Cache)
 untilObstacle turn f n b@Board{..} = 
