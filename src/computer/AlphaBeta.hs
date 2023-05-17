@@ -1,10 +1,10 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module AlphaBeta(computer, extendGame, devolveGame) where 
+module AlphaBeta(computer, extendGame, devolveGame, undo) where 
 
 import Types              (Assoc, ComputerMove, Size, Status (..), changeTurn, Turn (..) )
 import Board              (Board (..))
-import Game               (Game (..), LocalHistory, GlobalHistory )
+import Game               (Game (..), LocalHistory, GlobalHistory, State(..))
 import MkJumpMove         (mkJumpMove, rvJumpMove )
 import ComputerMoves      (allMoves, CMoves (..))
 import MkSimpleMove       (mkSimpleMove, rvSimpleMove)
@@ -79,7 +79,7 @@ takeFirstorLast cond (x :| xs) = if cond x then x else takeFirstorLast cond (N.f
 backtrack :: Game -> Game 
 backtrack = f . until (single . lhisto) devolveGame
   where 
-    f Game{..} = Game status assoc board NoCMoves (H.allMoves (fst assoc) board) Empty (hd lhisto : ghisto)
+    f Game{..} = Game status assoc board NoCMoves (H.allMoves (fst assoc) board) Empty (hd lhisto : ghisto) Start
       where hd (x :<| Empty) = x
             hd _             = error "until single makes sure this does not happen "      
 
@@ -102,8 +102,8 @@ extendJumpGame asc sts brd lhisto ghisto size mv =
       newCMoves = allMoves (fst asc') newBoard 
       newStatus = case newCMoves of NoCMoves -> GameOver; _ -> OnGoing
   in if sts == GameOver
-       then Game sts asc brd NoCMoves H.NoHMoves lhisto ghisto 
-       else Game newStatus asc' newBoard newCMoves H.NoHMoves (Right (size, mv) :<| lhisto) ghisto
+       then Game sts asc brd NoCMoves H.NoHMoves lhisto ghisto Start
+       else Game newStatus asc' newBoard newCMoves H.NoHMoves (Right (size, mv) :<| lhisto) ghisto Start
 
 extendSimpleGame :: Assoc -> Status -> Board -> LocalHistory -> GlobalHistory -> Size -> (Word8, Word8) -> Game 
 extendSimpleGame asc sts brd lhisto ghisto size is = 
@@ -112,8 +112,8 @@ extendSimpleGame asc sts brd lhisto ghisto size is =
       newCMoves = allMoves (fst asc') newBoard 
       newStatus = case newCMoves of NoCMoves -> GameOver; _ -> OnGoing 
   in if sts == GameOver 
-       then Game sts asc brd NoCMoves H.NoHMoves lhisto ghisto 
-       else Game newStatus asc' newBoard newCMoves H.NoHMoves (Left (size, is) :<| lhisto) ghisto
+       then Game sts asc brd NoCMoves H.NoHMoves lhisto ghisto Start
+       else Game newStatus asc' newBoard newCMoves H.NoHMoves (Left (size, is) :<| lhisto) ghisto Start
 
 devolveGame :: Game -> Game
 devolveGame g@Game{..} = 
@@ -123,12 +123,26 @@ devolveGame g@Game{..} =
       let newBoard  = rvSimpleMove (fst assoc) board sz is
           asc'      = changeTurn assoc
           newCMoves = allMoves (fst asc') newBoard 
-      in Game OnGoing asc' newBoard newCMoves H.NoHMoves hs ghisto
+      in Game OnGoing asc' newBoard newCMoves H.NoHMoves hs ghisto Start
     (Right (sz, mv) :<| hs) -> 
       let newBoard  = rvJumpMove board sz mv (fst assoc)
           asc'      = changeTurn assoc 
           newCMoves = allMoves (fst asc') newBoard 
-      in Game OnGoing asc' newBoard newCMoves H.NoHMoves hs ghisto 
+      in Game OnGoing asc' newBoard newCMoves H.NoHMoves hs ghisto Start
 
+undo :: Game -> Game
+undo g@Game{..} = 
+  case ghisto of 
+    []    -> g 
+    (Left (sz, is) : hs) -> 
+      let newBoard  = rvSimpleMove (fst assoc) board sz is
+          asc'      = changeTurn assoc
+          newCMoves = allMoves (fst asc') newBoard 
+      in Game OnGoing asc' newBoard newCMoves H.NoHMoves lhisto hs Start
+    (Right (sz, mv) : hs) -> 
+      let newBoard  = rvJumpMove board sz mv (fst assoc)
+          asc'      = changeTurn assoc 
+          newCMoves = allMoves (fst asc') newBoard 
+      in Game OnGoing asc' newBoard newCMoves H.NoHMoves lhisto hs Start
 
 

@@ -37,6 +37,7 @@ library
       HumanKingJump
       HumanMoves
       HumanPawnJump
+      MkHumanMove
       AlphaBeta
       ComputerKingJump
       ComputerMoves

@@ -3,11 +3,11 @@ module HumanMoves where
 import Types (Size (..), HumanMove, Memoize, Turn (..))
 import Data.List.NonEmpty ( NonEmpty (..), (<|) )
 import Data.Word (Word8)
-import Board
+import Board ( Board(..) )
 import Data.Bits (Bits(..), countTrailingZeros)
 import HumanKingJump (kingJumpMove)
 import SimpleMove (simpleKingMove, simplePawnMove)
-import HumanPawnJump
+import HumanPawnJump ( jumpPawnMove )
 
 type SMovesAt   = (Size, NonEmpty (Word8, Word8))
 type HJMovesAt  = (Size, NonEmpty HumanMove)

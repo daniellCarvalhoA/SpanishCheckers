@@ -8,6 +8,7 @@ import Data.List.NonEmpty ( NonEmpty, (<|) )
 import Data.Bits (Bits(..))
 import Control.Monad.Extra ( ifM ) 
 import Test.QuickCheck (Arbitrary (arbitrary))
+import Control.Arrow (ArrowChoice)
 type Assoc = (Turn, Color)
 
 data Turn   = Human   | Computer deriving (Eq, Show)
@@ -103,9 +104,7 @@ consM' c n ComputerMove{..} = ComputerMove n (c <> cache) (setBit path m) end
 ---------------------------------
 -----
 
-data Eaten = P Word8 
-           | K Word8 
-  deriving (Eq, Show)
+type Eaten = Either Word8 Word8
 
 data Point = Point {
     cell :: Word8 
@@ -135,13 +134,13 @@ instance Monoid Memoize where
 
 memoize :: Memoize -> Eaten -> Memoize
 memoize Memoize{..} = \case 
-  P _ -> Memoize (1 + pawns) kings 
-  K _ -> Memoize pawns (1 + kings)
+  Left  _ -> Memoize (1 + pawns) kings 
+  Right _ -> Memoize pawns (1 + kings)
 
 mem :: Eaten -> Memoize
 mem = \case 
-  P _ -> Memoize 1 0 
-  K _ -> Memoize 0 1
+  Left  _ -> Memoize 1 0 
+  Right _ -> Memoize 0 1
 
 cons :: Eaten -> Word8 -> (Memoize, [Path]) -> (Memoize, [Path])
 cons eat x (m, p) = (memoize m eat, (Point x eat <|) <$> p)
@@ -151,9 +150,8 @@ cons' eat x (c, p) = (addToCache c eat, (Point x eat <|) <$> p)
 
 addToCache :: Cache -> Eaten -> Cache 
 addToCache c = \case 
-  P w8 -> c <> cachePawn w8 
-  K w8 -> c <> cacheKing w8
-
+  Left  w8 -> c <> cachePawn w8 
+  Right w8 -> c <> cacheKing w8
 
 data HumanMove = Cons {
     root   :: Word8 

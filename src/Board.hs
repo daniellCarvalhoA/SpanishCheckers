@@ -149,7 +149,7 @@ upToMax n ps = do
 ---------------------------------
 
 initialboard :: Board 
-initialboard = Board empties' ups' kups' downs' kdowns' 
+initialboard = Board empties' ups' downs' kups' kdowns' 
     where 
         ups'     = 0xfff 
         downs'   = ups' `shiftL` 20

@@ -1,6 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Render (renderState, GameState(..), Dimensions(..), buildInitialDim, disp) where
+module Render (renderState, GameState(..), Dimensions(..), buildInitialDim, disp, isEndState) where
 
 import qualified Graphics.Gloss.Interface.IO.Game as G
 import qualified Graphics.Gloss.Interface.IO.Display as G
@@ -20,7 +20,7 @@ import Types
       Turn(Computer, Human),
       Assoc,
       )
-import Game (Game(..), initialGame)
+import Game (Game(..), initialGame, isGameOver)
 import Board (Board(..), groupAt)
 
 data Dimensions = Dimensions {
@@ -28,12 +28,15 @@ data Dimensions = Dimensions {
   , windowDimensions :: (Int, Int)
   , cellDimensions   :: Float
   , translation      :: (Int, Int)
-}
+} deriving Show
 
 data GameState = GameState {
     game :: Game
   , dims :: Dimensions
 }
+
+isEndState :: GameState -> Bool 
+isEndState = isGameOver . game
 
 renderState :: GameState -> G.Picture
 renderState GameState{..} =

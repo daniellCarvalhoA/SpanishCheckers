@@ -32,8 +32,8 @@ untilObstacle turn f n b@Board{..} =
     Nothing -> Nothing 
     Just i 
       | testBit emptys j -> untilObstacle turn f i b
-      | testBit (if turn == Human then downs  else  ups) j -> Just (i, P i)
-      | testBit (if turn == Human then kdowns else kups) j -> Just (i, K i)
+      | testBit (if turn == Human then downs  else  ups) j -> Just (i, Left  i)
+      | testBit (if turn == Human then kdowns else kups) j -> Just (i, Right i)
       | otherwise -> Nothing
       where j = fromIntegral i
 
@@ -41,7 +41,7 @@ diagonal :: Word32 -> Turn -> (Word8 -> Maybe Word8) -> Word8
          -> Board -> ([Word8], Eaten)
 diagonal w32 turn f n b@Board{..} = 
   case untilObstacle turn f n b of 
-    Nothing     -> ([],P 0)
+    Nothing     -> ([],Left  0)
     Just (i, e) ->
       (unfoldr (\x -> case f x of 
         Nothing                   -> Nothing
@@ -64,11 +64,11 @@ lddiagonal :: Word32 -> Turn -> Word8 -> Board -> ([Word8], Eaten)
 lddiagonal w32 turn = diagonal w32 turn leftDownAdj
 
 removeFromBoard :: Eaten -> Board -> Turn -> Board
-removeFromBoard (P w8) Board{..} = \case 
+removeFromBoard (Left  w8) Board{..} = \case 
   Human    -> Board (setBit emptys i) ups (clearBit downs i) kups kdowns
   Computer -> Board (setBit emptys i) (clearBit ups i) downs kups kdowns
   where i = fromIntegral w8
-removeFromBoard (K w8) Board {..} = \case 
+removeFromBoard (Right w8) Board {..} = \case 
   Human    -> Board (setBit emptys i) ups downs kups (clearBit kdowns i)
   Computer -> Board (setBit emptys i) ups downs (clearBit kups i) kdowns
   where i = fromIntegral w8

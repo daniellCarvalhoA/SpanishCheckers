@@ -30,6 +30,18 @@ prop_iso g@Game{..} | fst assoc == Human = True
 allEqual :: Eq a => NonEmpty a -> Bool 
 allEqual  (h :| hs) = all (== h) hs
 
+prop_all_disjoint :: Game -> Bool 
+prop_all_disjoint g = all (prop_disjoint . board) $ extendGame g 
+
+prop_all_complete :: Game -> Bool 
+prop_all_complete g = all (prop_complete . board) $ extendGame g 
+
+prop_all_complete2 :: Game -> Bool 
+prop_all_complete2 g = all (prop_complete . board) (devolveGame <$> extendGame g)
+
+prop_all_disjoint2 :: Game -> Bool 
+prop_all_disjoint2 g = all (prop_disjoint . board) (devolveGame <$> extendGame g)
+
 return []
 runTests :: IO Bool 
 runTests = $quickCheckAll

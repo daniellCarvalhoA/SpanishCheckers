@@ -56,8 +56,8 @@ rightEat board i = \case
 leftUpEat :: Board -> Word8 -> Maybe (Eaten, Word8)
 leftUpEat Board{..} n 
     | d == nofRows || m == 0 && odd d = Nothing 
-    | testBit downs  b = Just (P t, t) 
-    | testBit kdowns b = Just (K t, t)
+    | testBit downs  b = Just (Left  t, t) 
+    | testBit kdowns b = Just (Right t, t)
     | otherwise        = Nothing
     where r      = d `mod` 2 
           (d, m) = n `divMod` cellsPerRow
@@ -67,8 +67,8 @@ leftUpEat Board{..} n
 rightUpEat :: Board -> Word8 -> Maybe (Eaten, Word8)
 rightUpEat Board{..} n 
     | d == 0 || m == 3 && even d = Nothing 
-    | testBit downs b  = Just (P t, t)
-    | testBit kdowns b = Just (K t, t) 
+    | testBit downs b  = Just (Left  t, t)
+    | testBit kdowns b = Just (Right t, t) 
     | otherwise        = Nothing
     where r      = d `mod` 2 
           (d, m) = n `divMod` cellsPerRow
@@ -78,8 +78,8 @@ rightUpEat Board{..} n
 rightDownEat :: Board -> Word8 -> Maybe (Eaten, Word8)
 rightDownEat Board{..} n 
     | d == 0 || m == 3 && even d = Nothing 
-    | testBit ups  b = Just (P t, t)
-    | testBit kups b = Just (K t, t)
+    | testBit ups  b = Just (Left  t, t)
+    | testBit kups b = Just (Right t, t)
     | otherwise      = Nothing
     where r     = (nofCells - n) `div` cellsPerRow `mod` 2 
           (d,m) = n `divMod` cellsPerRow
@@ -89,8 +89,8 @@ rightDownEat Board{..} n
 leftDownEat :: Board -> Word8 -> Maybe (Eaten, Word8)
 leftDownEat Board{..} n 
     | d == 0 || m == 0 && odd d = Nothing
-    | testBit ups  b = Just (P t, t)
-    | testBit kups b = Just (K t, t)
+    | testBit ups  b = Just (Left  t, t)
+    | testBit kups b = Just (Right t, t)
     | otherwise      = Nothing 
     where r      = (nofCells - n) `div` cellsPerRow `mod` 2 
           (d, m) = n `divMod` cellsPerRow
