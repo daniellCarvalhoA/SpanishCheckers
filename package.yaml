@@ -26,6 +26,7 @@ dependencies:
 - criterion
 - extra
 - QuickCheck
+- async
 
 ghc-options:
 - -Wall

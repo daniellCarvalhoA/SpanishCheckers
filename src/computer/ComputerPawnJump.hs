@@ -1,7 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
 
-module ComputerPawnJump (jumpPawnMove) where 
+module ComputerPawnJump where
 import Types (cachePawn, cacheKing, Cache(..), Turn (..), ComputerMove (ComputerMove), consM)
 import Board ( Board(..), cellsPerRow, nofCells, nofRows ) 
 import Data.Word (Word8)

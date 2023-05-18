@@ -5,13 +5,14 @@ module Game (Game(..)
             , LocalHistory
             , GlobalHistory
             , testGame
+            , testGame2
             , State(..)
             , isGameOver
             , buildInitialGame
             ) where 
 
 import Types ( Color(..), Status (..), Turn(Human), Assoc, Size, ComputerMove , Turn(..), Path, Cache)
-import Board (Board(..), initialboard, showBoard, testBoard)
+import Board (Board(..), initialboard, showBoard, testBoard, testBoard2)
 import qualified ComputerMoves as CM (CMoves(..), allMoves)
 import Test.QuickCheck (Arbitrary(arbitrary))
 import qualified HumanMoves as HM 
@@ -74,3 +75,5 @@ initialGame = Game OnGoing (Human, White) initialboard CM.NoCMoves (HM.allMoves 
 testGame :: Game 
 testGame = Game OnGoing (Human, Black) testBoard CM.NoCMoves (HM.allMoves Human testBoard) Empty [] Start
 
+testGame2 :: Game 
+testGame2 = Game OnGoing (Human, White) testBoard2  CM.NoCMoves (HM.allMoves Human testBoard2) Empty [] Start

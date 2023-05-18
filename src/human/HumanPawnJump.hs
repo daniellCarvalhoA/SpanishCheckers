@@ -1,7 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase      #-}
 
-module HumanPawnJump (jumpPawnMove )where 
+module HumanPawnJump where 
 
 import Types
     ( Turn(..),
@@ -34,7 +34,7 @@ jumpPawnMove turn n board = start n
         (Nothing,Nothing)           -> (mem m, [Point i m :| [] ])
         (Nothing,Just (m',t))       -> cons m i $ go t m' 
         (Just (m',t),Nothing)       -> cons m i $ go t m'
-        (Just (m1,t1),Just (m2,t2)) -> cons m i $ (go t1 m1 `append` go t2 m2)  
+        (Just (m1,t1),Just (m2,t2)) -> cons m i (go t1 m1 `append` go t2 m2)  
 
 
 append :: (Memoize, [Path]) -> (Memoize, [Path]) -> (Memoize, [Path])
@@ -66,13 +66,13 @@ leftUpEat Board{..} n
 
 rightUpEat :: Board -> Word8 -> Maybe (Eaten, Word8)
 rightUpEat Board{..} n 
-    | d == 0 || m == 3 && even d = Nothing 
+    | d == nofRows || m == 3 && even d = Nothing 
     | testBit downs b  = Just (Left  t, t)
     | testBit kdowns b = Just (Right t, t) 
     | otherwise        = Nothing
     where r      = d `mod` 2 
           (d, m) = n `divMod` cellsPerRow
-          t      = n + 5 -r 
+          t      = n + 5 - r 
           b      = fromIntegral t
 
 rightDownEat :: Board -> Word8 -> Maybe (Eaten, Word8)

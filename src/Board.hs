@@ -2,7 +2,20 @@
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RecordWildCards #-}
 
-module Board (Board(..), nofCells, nofRows, cellsPerRow, swap, atLowerRow, atUpperRow, initialboard, showBoard, groupAt, testBoard )where
+module Board ( Board(..)
+             , nofCells
+             , nofRows
+             , cellsPerRow
+             , swap
+             , atLowerRow
+             , atUpperRow
+             , initialboard
+             , showBoard
+             , groupAt
+             , testBoard
+             , testBoard2
+             , testBoard3
+             ) where
 
 import Data.Word          (Word32, Word8)
 import Data.Bits          ( Bits(..) )
@@ -158,12 +171,28 @@ initialboard = Board empties' ups' downs' kups' kdowns'
         empties' = complement $ ups' .|. downs' 
 
 testBoard :: Board 
-testBoard = Board tEmptys upJump downJump bupJump 0 
+testBoard = Board empties' ups' downs' kups' kdowns'
+ where 
+    ups'     = bit 16
+    downs'   = bit 21
+    kups'    = bit 28 
+    kdowns'  = 0
+    empties' = complement $ ups' .|. downs' .|. kups' .|. kdowns'
 
-tEmptys = complement $ upJump .|. downJump .|. bupJump
+testBoard2 :: Board 
+testBoard2 = Board empties' ups' downs' kups' kdowns'
+ where 
+    ups'     = setBit (setBit (bit 2) 3) 10
+    downs'   = bit 7
+    kups'    = 0 
+    kdowns'  = 0
+    empties' = complement $ ups' .|. downs'
 
-upJump = bit 16
-
-bupJump = bit 28 
-
-downJump = bit 21
+testBoard3 :: Board 
+testBoard3 = Board empties' ups' downs' kups' kdowns'
+ where 
+    ups'     = 0
+    downs'   = 0 `setBit` 10 `setBit` 11 `setBit` 16 `setBit` 17 `setBit` 22 `setBit` 24
+    kups'    = bit 18 
+    kdowns'  = 0
+    empties' = complement $ kups' .|. downs'

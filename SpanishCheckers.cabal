@@ -54,6 +54,7 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       QuickCheck
+    , async
     , base >=4.7 && <5
     , containers
     , criterion
@@ -71,6 +72,7 @@ executable SpanishCheckers-exe
   build-depends:
       QuickCheck
     , SpanishCheckers
+    , async
     , base >=4.7 && <5
     , containers
     , criterion
@@ -89,6 +91,7 @@ test-suite SpanishCheckers-test
   build-depends:
       QuickCheck
     , SpanishCheckers
+    , async
     , base >=4.7 && <5
     , containers
     , criterion
@@ -107,6 +110,7 @@ benchmark SpanishCheckers-bench
   build-depends:
       QuickCheck
     , SpanishCheckers
+    , async
     , base >=4.7 && <5
     , containers
     , criterion

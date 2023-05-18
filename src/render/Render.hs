@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Render (renderState, GameState(..), Dimensions(..), buildInitialDim, disp, isEndState) where
 
@@ -18,10 +19,13 @@ import GoBack ( goBack )
 import Types
     ( Color(Black, White),
       Turn(Computer, Human),
-      Assoc,
+      Assoc, Point (..),
       )
-import Game (Game(..), initialGame, isGameOver)
+import Game (Game(..), initialGame, isGameOver, State (..))
 import Board (Board(..), groupAt)
+import qualified Data.List.NonEmpty as N
+import Data.Maybe (isJust)
+import Data.Foldable (find)
 
 data Dimensions = Dimensions {
     screenDimensions :: (Int, Int)
@@ -44,14 +48,14 @@ renderState GameState{..} =
   $ G.pictures
   $ (<>[back]) $ concatMap addToPicture (zip [0..7] $ groupAt 8 [0 .. 63])
   where
-    addToPicture = row (assoc game) (cellDimensions dims) (board game)
+    addToPicture = row (state game) (assoc game) (cellDimensions dims) (board game)
     back = G.translate (9.75 * cellDimensions dims) (3.5 * cellDimensions dims) 
          $ goBack G.white $ cellDimensions dims
 
 
 
-row :: Assoc -> Float -> Board -> (Int, [Int]) -> [G.Picture]
-row asc n Board{..} (y, xs) = map renderCell xs
+row :: State -> Assoc -> Float -> Board -> (Int, [Int]) -> [G.Picture]
+row st asc n Board{..} (y, xs) = map renderCell xs
     where
         renderCell x
             | even x && even y       = G.translate x' y' $ nonCell n
@@ -60,7 +64,7 @@ row asc n Board{..} (y, xs) = map renderCell xs
             | kups `testBit` point   = G.translate x' y' $ kingHumanCell n asc
             | downs `testBit` point  = G.translate x' y' $ pawnComputerCell n asc
             | kdowns `testBit` point = G.translate x' y' $ kingComputerCell n asc
-            | otherwise              = G.translate x' y' $ emptyCell n
+            | otherwise              = G.translate x' y' $ emptyCell point n st
             where (x', y') = (n * fromIntegral (x `mod` 8), n * fromIntegral  y)
                   point = x `div` 2
 
@@ -106,8 +110,19 @@ kingComputerCell f asc = G.pictures $ (G.color playingCellColor (square f) :) $ 
 nonCell :: Float -> G.Picture
 nonCell f = G.color nonCellColor $ square f
 
-emptyCell :: Float -> G.Picture
-emptyCell f = G.color playingCellColor $ square f
+emptyCell :: Int -> Float -> State -> G.Picture
+emptyCell i f = \case 
+  Start -> plainCell 
+  StepS (_,_,xs) -> if isJust $ find ((==i) . fromIntegral . snd) xs 
+                      then nextCell
+                      else plainCell
+  StepJ (_,_,_,_,_,xs) 
+                 -> if isJust $ find ((==i) . fromIntegral . cell . N.head) xs 
+                      then nextCell 
+                      else plainCell 
+  where plainCell = G.color playingCellColor $ square f  
+        nextCell  = G.color (G.light playingCellColor) $ square f 
+
 
 buildInitialDim :: IO Dimensions
 buildInitialDim = do

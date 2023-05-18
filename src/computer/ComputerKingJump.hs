@@ -2,7 +2,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase      #-}
 
-module ComputerKingJump (kingJumpMove)  where 
+module ComputerKingJump (kingJumpMove) where 
 
 import Data.Bits (testBit, (.|.), xor, Bits (bit, setBit, clearBit))
 import Types      ( Cache(..), Turn(..), cacheKing, cachePawn, Direction (..), ComputerMove (..), allowedDirections, consM)
@@ -12,6 +12,19 @@ import Data.List (unfoldr, nub)
 import Utils     ( rightUpAdj, leftUpAdj, rightDownAdj, leftDownAdj, filterNullMap, concatFilter ) 
 import Control.Arrow (second)
 import Data.Function ((&))
+
+-- data ComputerMove' = ComputerMove' {
+--     start' :: Word8 
+--   , cache' :: Cache 
+--   , end'   :: Word8
+-- } deriving (Eq, Show)
+
+-- consM' :: Cache -> Word8 -> (Cache, [ComputerMove']) -> (Cache, [ComputerMove'])
+-- consM' c n (c', mvs) = (c <> c', consM'' c n <$> mvs)
+
+-- consM'' :: Cache -> Word8 -> ComputerMove' -> ComputerMove'
+-- consM'' c n ComputerMove'{..} = ComputerMove' n (c <> cache') end'
+  -- where m = fromIntegral n 
 
 
 kingJumpMove :: Turn -> Board -> Word8 -> (Cache, [ComputerMove])
@@ -32,6 +45,23 @@ kingJumpMove turn board i = second nub begin
       Computer -> Board (setBit emptys j) ups downs kups (clearBit kdowns j)
       where j = fromIntegral i
 
+-- kingJumpMove' :: Turn -> Board -> Word8 -> (Cache, [ComputerMove'])
+-- kingJumpMove' turn board i = second nub begin 
+--   where
+--     begin = filterNullMap (stops mempty turn i board) [NorthEast ..]
+--           & concatFilter (\l@(_, c, _, _) -> apply c i (`removeStart` turn) l)
+    
+--     go c dir board' j = case stops c turn j board' `filterNullMap` allowedDirections dir of 
+--                           [] -> (mempty, [ComputerMove' j mempty j])
+--                           xs -> concatFilter (\l@(_, c', _, _) -> apply (c' <> c) j id l) xs 
+--               where k = fromIntegral j 
+    
+--     apply c' j f (is, c, dir, b) = consM' c j $ concatFilter (go (c <> c') dir (f b)) is 
+
+--     removeStart Board{..} = \case 
+--       Human    -> Board (setBit emptys j) ups downs (clearBit kups j) kdowns 
+--       Computer -> Board (setBit emptys j) ups downs kups (clearBit kdowns j)
+--       where j = fromIntegral i
 
 untilObstacle :: Turn -> (Word8 -> Maybe Word8) -> Word8 -> Board -> Maybe (Word8, Cache)
 untilObstacle turn f n b@Board{..} = 

@@ -1,5 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
+
 module MkHumanMove where 
 import Data.Word (Word8)
 import Game ( Game (..), State (..) )
