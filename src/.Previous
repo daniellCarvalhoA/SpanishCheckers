@@ -1,0 +1,2091 @@
+{-# LANGUAGE LambdaCase, RecordWildCards, BangPatterns, TupleSections
+           , DataKinds, GADTs, KindSignatures, FlexibleInstances
+           , TypeFamilyDependencies
+           , NumericUnderscores, UndecidableInstances
+           , DeriveFunctor, StandaloneDeriving   #-}
+
+module Board2 where
+
+import Data.Word                (Word64, Word8)
+import Data.Bits                (Bits(..),FiniteBits(..) )
+import Data.Foldable            (Foldable(foldl') )
+import Data.List                ((\\), nub, unfoldr, intercalate, intersperse, zip4)
+import Data.List.NonEmpty       (NonEmpty(..), (<|))
+import Data.Function            ((&))
+import Data.Bifunctor           (Bifunctor(..))
+import Data.Maybe               (fromJust, isJust)
+import Data.Tuple.Extra         (both)
+import Data.Foldable            (find)
+import Data.Monoid              (First(..))
+import Data.IORef               (IORef(..), readIORef, newIORef, modifyIORef')
+import Data.Kind                (Type(..))
+import Data.Ord                 (Down(..))
+import Data.Type.Equality     
+import Data.Proxy
+
+import Types (Cache(..),Size(..), Turn(..), CMoves(..), AMove(..))
+import Board (Board (..))
+import Control.Concurrent       (threadDelay)
+import Control.Concurrent.Async (wait, withAsync, race_) 
+import Control.Monad.Extra      (ifM) 
+import Control.Applicative      (Alternative(..))
+
+import Debug.Trace              (trace, traceShow)
+
+import qualified Test.QuickCheck    as T 
+import qualified Data.List.NonEmpty as N        (reverse, uncons, fromList, head, nonEmpty,
+                                                 sortWith, filter, toList, scanl)
+import qualified Data.Foldable      as Foldable (toList)
+import qualified Data.List          as List     (scanl')
+
+import qualified Graphics.Gloss.Interface.IO.Game     as G 
+import qualified Graphics.Gloss.Interface.Environment as E 
+----------------------------
+---- Board Type
+
+-- data Board = Board {
+-- uppawns :: !Word64
+-- , downpawns :: !Word64
+-- , upkings :: !Word64
+-- , downkings :: !Word64
+-- , mask       :: !Word64
+-- } deriving Eq
+
+empties :: Board -> Word64 
+empties Board{..} = 
+    complement $ uppawns .|. downpawns .|. upkings .|. downkings .|. mask 
+
+-- instance T.Arbitrary Board where
+-- arbitrary = do
+-- (wp,wk) <- do
+-- numberOfwhites  <- T.chooseInt (0,11)
+-- partwpawnskings <- T.chooseInt (0, numberOfwhites)
+-- possiblewhites  <- T.sublistOf possible >>= T.shuffle
+-- return $ splitAt partwpawnskings $ take numberOfwhites possiblewhites
+
+-- (bp,bk) <- do
+-- numberOfblacks  <- T.chooseInt (0,11)
+-- partbpawnskings <- T.chooseInt (0, numberOfblacks)
+-- possibleblacks  <- T.sublistOf (possible \\ (wp <> wk)) >>= T.shuffle
+-- return $ splitAt partbpawnskings $ take numberOfblacks possibleblacks
+
+-- let wps = setBits wk .&. (complement upperRow)
+-- wks = setBits wp
+-- bps = setBits bp .&. (complement lowerRow)
+-- bks = setBits bk
+
+-- return $ Board wps bps wks bks msk
+
+-- where possible = [0..7] <> [9..16] <> [18..25] <> [27..34]
+
+setBits :: (Num a, Bits a) => [Int] -> a
+setBits = foldl' setBit 0
+
+msk :: Word64
+msk = setBits $ [8,17,26] <> [35 .. 63]
+
+upperRow :: Word64
+upperRow = 0x780000000 -- setBits 0 [31,32,33,34]
+
+lowerRow :: Word64
+lowerRow = 0xf         -- setBits 0 [0,1,2,3]
+
+-- data Size = Pawn | King
+-- deriving (Show, Eq)
+
+-- data Turn = Human | Computer
+-- deriving (Eq,Show)
+
+-- instance T.Arbitrary Turn where
+-- arbitrary = ifM T.arbitrary (pure Human) (pure Computer)
+
+changeturn :: Turn -> Turn 
+changeturn Computer = Human 
+changeturn Human    = Computer
+
+--------------------------
+-- ----- Board pretty printer
+
+-- instance Show Board where
+-- show Board{..} =
+-- let ws  = pad35 $ binary $ uppawns
+-- bs  = pad35 $ binary $ downpawns
+-- kws = pad35 $ binary $ upkings
+-- kbs = pad35 $ binary $ downkings
+-- vec = removeAll [26,17,8] $ zip4 ws bs kws kbs
+-- brd = zip [0 ..] $ map reverse $ groupAt 4 vec
+-- g (1,1,1,1) = "|#|"
+-- g (1,0,0,0) = "|w|"
+-- g (0,1,0,0) = "|b|"
+-- g (0,0,1,0) = "|W|"
+-- g (0,0,0,1) = "|B|"
+-- g (0,0,0,0) = "|_|"
+-- g s         = show s
+-- f :: (Int,[(Word64, Word64, Word64, Word64)]) -> [(Word64,Word64, Word64, Word64)]
+-- f (i,xs)
+-- | odd i     = (1,1,1,1) : intersperse (1,1,1,1) xs
+-- | otherwise = (<> [(1,1,1,1)]) $ intersperse (1,1,1,1) xs
+-- in intercalate "\n" $ concatMap g . f <$> brd
+
+-- binary :: Integral t => t -> [t]
+-- binary m = go m id []
+-- where
+-- go 0 k = k
+-- go n k = go q ((r:) . k)
+-- where (q,r) = n `divMod` 2
+
+groupAt :: Int -> [a] -> [[a]]
+groupAt _ [] = []
+groupAt n xs = ys : groupAt n zs
+  where (ys, zs) = splitAt n xs
+
+-- pad35 :: Integral t => [t] -> [t]
+-- pad35 ts =
+-- let l = abs (35 - length ts)
+-- in replicate l 0 <> ts
+
+-- remove :: Int -> [a] -> [a]
+-- remove _ [] = []
+
+-- remove 0 (_ : xs) = xs
+-- remove n (x : xs) = x : remove (n - 1) xs
+
+-- removeAll :: [Int] -> [a] -> [a]
+-- removeAll is xs = foldl' (flip remove) xs is
+
+------------------------------------------
+-- ---------- Board Examples
+
+ --  |31 |#  |32 |#  |33 |#  |34 |#  |
+ --  |#  |27 |#  |28 |#  |29 |#  |30 |
+ --  |22 |#  |23 |#  |24 |#  |25 |#  |
+ --  |#  |18 |#  |19 |#  |20 |#  |21 |
+ --  |13 |#  |14 |#  |15 |#  |16 |#  |
+ --  |#  |9  |#  |10 |#  |11 |#  |12 |
+ --  |4  |#  |5  |#  |6  |#  |7  |#  |
+ --  |#  |0  |#  |1  |#  |2  |#  |3  |  
+
+testmovesboard :: Board 
+testmovesboard = Board (setBits [18,21,25,30,28]) 
+                       (setBits [6])
+                       (setBits [20,22,31,32])
+                       0 
+                       msk
+
+
+initialboard :: Board
+initialboard = Board (setBits [0,1,2,3,4,5,6,7,9,10,11,12])
+                     (setBits [22,23,24,25,27,28,29,30,31,32,33,34])
+                     0
+                     0
+                     msk
+
+testboard :: Board 
+testboard = Board (setBits [0,1,3,4,9,10]) (setBits [11,19,22,23,30,31,34])
+                 (setBits [33]) 0 msk
+
+testgalo :: Board 
+testgalo = Board 0 0 (setBits [24]) (setBits [3,22,25]) msk
+
+testgalo2 :: Board 
+testgalo2 = Board 0 0 (setBits [11]) (setBits [3]) msk
+
+testSimplePawnBoard :: Board 
+testSimplePawnBoard = Board (setBits [27]) 0 0 0 msk
+
+testSimpleKingBoard :: Board 
+testSimpleKingBoard = Board 0 0 (setBits [4,7]) 0 msk
+
+testPawnJumpBoard :: Board 
+testPawnJumpBoard = Board (setBits [5]) (setBits [10,18,19,27,28]) 0 (setBits [9]) msk
+
+testKingJumpBoard :: Board 
+testKingJumpBoard = Board 0 (setBits [11,25,28,19,9]) (setBits [21]) 0 msk
+
+testErrorBoard :: Board 
+testErrorBoard = Board (setBits [4,12,29,27,23]) (setBits [19]) 0 0 msk 
+
+testErrorBoard2 :: Board 
+testErrorBoard2 = Board (setBits [30]) 0 (setBits [0,1,5,18,20,25,33]) 0 msk 
+
+testErrorBoard3 :: Board 
+testErrorBoard3 = Board (setBits [9,15,21,25])
+                        (setBits [4,6,32,33])
+                        (setBits [0,2,7,27])
+                        (setBits [11,12,18,23,31])
+                        msk
+
+testAlphaBetaError :: Board 
+testAlphaBetaError = Board (setBits [1])
+                           (setBits [5,9,13,7,12,33,25])
+                           0
+                           (setBits [31,6,21])
+                           msk
+
+testAlphaBetaError2 :: Board 
+testAlphaBetaError2 = Board (setBits [9,5,10,7])
+                            (setBits [33])
+                            (setBits [12,20])
+                            0
+                            msk
+
+---------------------------------------
+-- --------- All SimpleMoves (parallel)
+
+type SimpleMove  = (Size, Word64)
+
+allSimpleMoves :: Board -> Turn ->  [SimpleMove]
+allSimpleMoves b@Board{..} = \case
+  Human    -> if uppawns == 0 then [] 
+                else simpleWhiteMovesLeft wpsl <> simpleWhiteMovesRight wpsr
+  Computer -> if downpawns == 0 then [] 
+                else simpleBlackMovesLeft bpsl <> simpleBlackMovesRight bpsr
+  where
+    wpsl = (uppawns `shiftL` 4) .&. empties b
+    wpsr = (uppawns `shiftL` 5) .&. empties b
+    bpsl = (downpawns `shiftR` 5) .&. empties b
+    bpsr = (downpawns `shiftR` 4) .&. empties b
+    
+    simpleWhiteMovesLeft :: Word64 -> [(Size,Word64)]
+    simpleWhiteMovesLeft mv =
+      let start = countTrailingZeros mv
+          total = popCount mv
+          go _ 0 = []
+          go i t | testBit mv i = (Pawn, bit i .|. (bit i `shiftR` 4)) : go (i + 1) (t - 1)
+                 | otherwise    = go (i + 1) t
+      in go start total
+
+    simpleWhiteMovesRight :: Word64 -> [(Size,Word64)]
+    simpleWhiteMovesRight mv =
+      let start = countTrailingZeros mv
+          total = popCount mv
+          go _ 0 = []
+          go i t | testBit mv i = (Pawn, bit i .|. (bit i `shiftR` 5)) : go (i + 1) (t - 1)
+                 | otherwise    = go (i + 1) t
+      in go start total
+
+    simpleBlackMovesLeft :: Word64 -> [(Size,Word64)]
+    simpleBlackMovesLeft mv =
+      let start = countTrailingZeros mv
+          total = popCount mv
+          go _ 0 = []
+          go i t | testBit mv i = (Pawn, bit i .|. (bit i `shiftL` 5)) : go (i + 1) (t - 1)
+                 | otherwise    = go (i + 1) t
+      in go start total
+
+    simpleBlackMovesRight :: Word64 -> [(Size,Word64)]
+    simpleBlackMovesRight mv =
+      let start = countTrailingZeros mv
+          total = popCount mv
+          go _ 0 = []
+          go i t | testBit mv i = (Pawn, bit i .|. (bit i `shiftL` 4)) : go (i + 1) (t - 1)
+                 | otherwise    = go (i + 1) t
+      in go start total
+
+-------------------------------------------
+-------- All Simple King Moves
+
+kingSimpleMoves :: Board -> Turn -> [SimpleMove]
+kingSimpleMoves b@Board{..} turn = if ks == 0 then [] else ksm
+  where
+    es  = empties b
+    ks  = case turn of Human -> upkings; Computer -> downkings
+    ksm = concat
+        [ ksmlu ks & kingMovesLeftUp
+        , ksmru ks & kingMovesRightUp
+        , ksmld ks & kingMovesLeftDown
+        , ksmrd ks & kingMovesRightDown
+        ]
+
+    ksmlu :: Word64 -> [Word64]
+    ksmlu kgs = go $ (kgs `shiftL` 4) .&. es
+      where go 0  = []
+            go !n = n : go ((n `shiftL` 4) .&. es)
+
+    kingMovesLeftUp :: [Word64] -> [SimpleMove]
+    kingMovesLeftUp []          = []
+    kingMovesLeftUp xs@(mv : _) =
+      let go !i !m !n !t 
+            | t == 0      = []
+            | testBit m i = (King, bit i .|. (bit i `shiftR` (n * 4))) : go (i + 1) m n (t - 1)
+            | otherwise   = go (i + 1) m n t
+          every [] _ _         = []
+          every (y : ys) !s !j = go s y j total <> every ys (s + 4) (j + 1)
+            where total = popCount y
+      in every xs (countTrailingZeros mv) 1
+
+    ksmru :: Word64 -> [Word64]
+    ksmru kgs = go $ (kgs `shiftL` 5) .&. es
+      where go 0 = []
+            go !n = n : go ((n `shiftL` 5) .&. es)
+
+    kingMovesRightUp :: [Word64] -> [SimpleMove]
+    kingMovesRightUp [] = []
+    kingMovesRightUp xs@(mv : _) =
+      let go !i !m !n !t 
+            | t == 0      = []
+            | testBit m i = (King, bit i .|. (bit i `shiftR` (n * 5))) : go (i + 1) m n (t - 1)
+            | otherwise   = go (i + 1) m n t
+          every [] _ _         = []
+          every (y : ys) !s !j = go s y j total <> every ys (s + 5) (j + 1)
+            where total = popCount y
+      in every xs (countTrailingZeros mv) 1
+
+    ksmld :: Word64 -> [Word64]
+    ksmld kgs = go $ (kgs `shiftR` 5) .&. es
+      where go 0 = []
+            go !n = n : go ((n `shiftR` 5) .&. es)
+
+    kingMovesLeftDown :: [Word64] -> [SimpleMove]
+    kingMovesLeftDown [] = []
+    kingMovesLeftDown xs@(mv : _) =
+      let go !i !m !n !t 
+            | t == 0      = []
+            | testBit m i = (King, bit i .|. (bit i `shiftL` (n * 5))) : go (i - 1) m n (t - 1)
+            | otherwise   = go (i - 1) m n t
+          every [] _ _         = []
+          every (y : ys) !s !j = go s y j total <> every ys (s + 5) (j + 1)
+            where total = popCount y
+      in every xs (countLeadingZeros mv) 1
+
+    ksmrd :: Word64 -> [Word64]
+    ksmrd kgs = go $ (kgs `shiftR` 4) .&. es
+      where go 0 = []
+            go !n = n : go ((n `shiftR` 4) .&. es)
+
+    kingMovesRightDown :: [Word64] -> [SimpleMove]
+    kingMovesRightDown [] = []
+    kingMovesRightDown xs@(mv : _) =
+      let go !i !m !n !t 
+            | t == 0      = []
+            | testBit m i = (King, bit i .|. (bit i `shiftL` (n * 4))) : go (i - 1) m n (t - 1)
+            | otherwise   = go (i - 1) m n t
+          every [] _ _         = []
+          every (y : ys) !s !j = go s y j total <> every ys (s + 4) (j + 1)
+            where total = popCount y
+      in every xs (countLeadingZeros mv) 1
+
+-----------------------------
+-- Alternative : All SimpleKingMoves and Possible Jump Starts
+
+checkjumps :: Board -> Turn -> [Word64]
+checkjumps board turn = filter (checknextemptylu es) (checkjumpsleftUp    board turn)
+                     <> filter (checknextemptyru es) (checkjumpsRightUp   board turn)
+                     <> filter (checknextemptyld es) (checkjumpsLeftDown  board turn)
+                     <> filter (checknextemptyrd es) (checkjumpsrightDown board turn)
+  where es = empties board
+checknextemptylu :: Word64 -> Word64 -> Bool 
+checknextemptylu es ws = (ws `shiftL` 4) .&. es /= 0
+
+checknextemptyru :: Word64 -> Word64 -> Bool 
+checknextemptyru es ws = (ws `shiftL` 5) .&. es /= 0
+
+checknextemptyld :: Word64 -> Word64 -> Bool 
+checknextemptyld es ws = (ws `shiftR` 5) .&. es /= 0
+
+checknextemptyrd :: Word64 -> Word64 -> Bool 
+checknextemptyrd es ws = (ws `shiftR` 4) .&. es /= 0
+
+checkjumpsleftUp :: Board -> Turn -> [Word64]
+checkjumpsleftUp b@Board{..} = \case 
+  Human    -> go (upkings `shiftL` 4)
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftL` 4) .&. ehs)
+                              else j : go ((n `shiftL` 4) .&. ehs)
+          opponents = downkings .|. downpawns          
+  Computer -> go (downkings `shiftL` 4) 
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftL` 4) .&. ecs) 
+                              else j : go ((n `shiftL` 4) .&. ecs)
+          opponents = upkings .|. uppawns          
+  where ehs = complement $ upkings .|. uppawns .|. mask
+        ecs = complement $ downkings .|. downpawns .|. mask
+
+checkjumpsrightDown :: Board -> Turn -> [Word64]
+checkjumpsrightDown b@Board{..} = \case 
+  Human    -> go (upkings `shiftR` 4)
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftR` 4) .&. ehs)
+                              else j : go ((n `shiftR` 4) .&. ehs)
+          opponents = downkings .|. downpawns          
+  Computer -> go (downkings `shiftR` 4) 
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftR` 4) .&. ecs) 
+                              else j : go ((n `shiftR` 4) .&. ecs)
+          opponents = upkings .|. uppawns          
+  where ehs = complement $ upkings .|. uppawns .|. mask
+        ecs = complement $ downkings .|. downpawns .|. mask
+
+checkjumpsRightUp :: Board -> Turn -> [Word64]
+checkjumpsRightUp b@Board{..} = \case 
+  Human    -> go (upkings `shiftL` 5)
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftL` 5) .&. ehs)
+                              else j : go ((n `shiftL` 5) .&. ehs)
+          opponents = downkings .|. downpawns          
+  Computer -> go (downkings `shiftL` 5) 
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftL` 5) .&. ecs) 
+                              else j : go ((n `shiftL` 5) .&. ecs)
+          opponents = upkings .|. uppawns          
+  where ehs = complement $ upkings .|. uppawns .|. mask
+        ecs = complement $ downkings .|. downpawns .|. mask
+
+checkjumpsLeftDown :: Board -> Turn -> [Word64]
+checkjumpsLeftDown b@Board{..} = \case 
+  Human    -> go (upkings `shiftR` 5)
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftR` 5) .&. ehs)
+                              else j : go ((n `shiftR` 5) .&. ehs)
+          opponents = downkings .|. downpawns          
+  Computer -> go (downkings `shiftR` 5) 
+    where go 0 = []
+          go n = let j = n .&. opponents
+                 in if j == 0 then go ((n `shiftR` 5) .&. ecs) 
+                              else j : go ((n `shiftR` 5) .&. ecs)
+          opponents = upkings .|. uppawns          
+  where ehs = complement $ upkings .|. uppawns .|. mask
+        ecs = complement $ downkings .|. downpawns .|. mask
+
+
+-- kingSimpleMoves :: Board -> Turn -> [SimpleMove]
+-- kingSimpleMoves b@Board{..} turn = if ks == 0 then [] else ksm
+-- where
+-- es  = empties b
+-- ks  = case turn of Human -> upkings; Computer -> downkings
+-- ksm = concat
+-- [ ksmlu ks & kingMovesLeftUp
+-- , ksmru ks & kingMovesRightUp
+-- , ksmld ks & kingMovesLeftDown
+-- , ksmrd ks & kingMovesRightDown
+-- ]
+
+allsimplekingsandjumpstarts :: Board -> Turn -> ([SimpleMove],[[Word64]])
+allsimplekingsandjumpstarts board turn = if ks == 0 then ([],[]) else ksm
+  where 
+    ks = case turn of Human -> upkings board; Computer -> downkings board 
+    g (xs,ys) (zs,ks) = (xs <> zs, ys <> ks)
+    ksm = bimap (kingMovesUp   NorthWest) (map decomp) (ksmlu' board turn NorthWest) 
+      `g` bimap (kingMovesUp   NorthEast) (map decomp) (ksmlu' board turn NorthEast)
+      `g` bimap (kingMovesDown SouthWest) (map decomp) (ksmlu' board turn SouthWest)
+      `g` bimap (kingMovesDown SouthEast) (map decomp) (ksmlu' board turn SouthEast)
+
+iter :: Direction -> Word64 -> Word64 
+iter NorthEast = rightUpAdj
+iter NorthWest = leftUpAdj
+iter SouthEast = rightDownAdj 
+iter SouthWest = leftDownAdj
+
+itern :: Int -> Direction -> Word64 -> Word64 
+itern n NorthEast = rightUpAdjn   n
+itern n NorthWest = leftUpAdjn    n
+itern n SouthEast = rightDownAdjn n
+itern n SouthWest = leftDownAdjn  n
+
+opposite :: Direction -> Direction 
+opposite NorthEast = SouthWest 
+opposite NorthWest = SouthEast 
+opposite SouthEast = NorthWest 
+opposite SouthWest = NorthEast
+
+rightUpAdjn, leftUpAdjn, rightDownAdjn, leftDownAdjn :: Int -> Word64 -> Word64
+rightUpAdjn   n  = (`shiftL` (n*5))
+leftUpAdjn    n  = (`shiftL` (n*4))
+rightDownAdjn n  = (`shiftR` (n*4))
+leftDownAdjn  n  = (`shiftR` (n*5))
+
+ksmlu' :: Board -> Turn -> Direction -> ([Word64],[Word64])
+ksmlu' b@Board{..} turn dir = go (iter dir kgs .&. es) (iter dir kgs .&. opponents) 1 
+  where go !n !m !j
+          | n == 0 = let eaten = if turn == Human 
+                                    then (downpawns .|. downkings) .&. m 
+                                    else (uppawns .|. upkings) .&. m 
+                     in case eaten of
+                         0 -> ([], [])
+                         _ -> ([], [itern j (opposite dir) eaten ])
+          | otherwise = let (ws, cs) = go (iter dir n .&. es) (iter dir n .&. opponents) (succ j) 
+                            eaten = if turn == Human 
+                                    then (downpawns .|. downkings) .&. m 
+                                    else (uppawns .|. upkings) .&. m 
+                        in case eaten of
+                          0 -> (n : ws, cs)
+                          _ -> (n : ws, itern j (opposite dir) eaten : cs)
+
+        es        = empties b   
+        opponents = if turn == Human then downpawns .|. downkings else uppawns .|. upkings
+        kgs       = if turn == Human then upkings else downkings
+        
+kingMovesUp :: Direction -> [Word64] -> [SimpleMove]
+kingMovesUp _ []          = []
+kingMovesUp dir xs@(mv : _) =
+      let go !i !m !n !t 
+            | t == 0      = []
+            | testBit m i = (King, bit i .|. ( itern n (opposite dir) (bit i))) : go (i + 1) m n (t - 1)
+            | otherwise   = go (i + 1) m n t
+          every [] _ _         = []
+          every (y : ys) !s !j = go s y j total <> every ys (s + 4) (j + 1)
+            where total = popCount y
+      in every xs (countTrailingZeros mv) 1
+        
+kingMovesDown :: Direction -> [Word64] -> [SimpleMove]
+kingMovesDown _ [] = []
+kingMovesDown dir xs@(mv : _) =
+      let go !i !m !n !t 
+            | t == 0      = []
+            | testBit m i = (King, bit i .|. (itern n (opposite dir) (bit i) )) : go (i - 1) m n (t - 1)
+            | otherwise   = go (i - 1) m n t
+          every [] _ _         = []
+          every (y : ys) !s !j = go s y j total <> every ys (s + 4) (j + 1)
+            where total = popCount y
+      in every xs (countLeadingZeros mv) 1
+
+
+---------------------------------
+-- --------- Make Simple Moves
+
+mkSimpleMove :: SimpleMove -> Board -> Turn -> Board
+mkSimpleMove (size, w64) Board{..} = \case
+  Human    ->
+    case size of 
+      Pawn -> 
+        let newuppawns = uppawns `xor` w64 `xor` (w64 .&. upperRow) 
+            newupkings = upkings .|. (w64 .&. upperRow)
+        in Board newuppawns downpawns newupkings downkings mask 
+      King -> 
+        let newupkings = upkings `xor` w64 
+        in Board uppawns downpawns newupkings downkings mask 
+  Computer ->
+    case size of 
+      Pawn -> 
+        let newdownpawns = downpawns `xor` w64 `xor` (w64 .&. lowerRow)
+            newdownkings = downkings .|. (w64 .&. lowerRow)
+        in Board uppawns newdownpawns upkings newdownkings mask 
+      King -> 
+        let newdownkings = downkings `xor` w64 
+        in Board uppawns downpawns upkings newdownkings mask 
+
+rvSimpleMove :: SimpleMove -> Board -> Turn -> Board
+rvSimpleMove (size, w64) Board{..} = \case
+  Computer ->
+    case size of 
+      Pawn -> 
+        let newuppawns = uppawns `xor` w64 `xor` (w64 .&. upperRow)
+            newupkings = upkings `xor` (w64 .&. upperRow)
+        in Board newuppawns downpawns newupkings downkings mask 
+      King ->
+        let newupkings = upkings `xor` w64 
+        in  Board uppawns downpawns newupkings downkings mask
+  Human    ->
+    case size of 
+      Pawn ->
+        let newdownpawns = downpawns `xor` w64 `xor` (w64 .&. lowerRow)
+            newdownkings = downkings `xor` (w64 .&. lowerRow)
+        in Board uppawns newdownpawns upkings newdownkings mask 
+      King -> 
+        let newdownkings = downkings `xor` w64
+        in Board uppawns downpawns upkings newdownkings mask
+
+---------------------
+-- ------ Jump Move Computer Types
+
+-- the reason for difderen move types for Human and Computer moves is the 
+-- comnputer does not need directional information. To make its move it does not 
+-- need to know the order of eaten pieces and the intermideate positions in the path.
+-- These, however are needed fr thun UI.
+
+---
+-- data Cache = Cache {
+-- pawn :: Word64
+-- , king :: Word64
+-- } deriving Show
+
+-- instance Eq Cache where
+-- (Cache p1 k1) == (Cache p2 k2) = popCount p1 == popCount p2 && popCount k1 == popCount k2
+
+-- instance Ord Cache where
+-- (Cache p1 k1) <= (Cache p2 k2)
+-- | popCount p1 + popCount k1 == popCount p2 + popCount k2 = popCount k1 <= popCount k2
+-- | otherwise = popCount p1 + popCount k1 < popCount p2 + popCount k2
+
+-- instance Semigroup Cache where
+-- (Cache p1 k1) <> (Cache p2 k2) = Cache (p1 .|. p2) (k1 .|. k2)
+
+-- instance Monoid Cache where
+-- mempty = Cache 0 0
+
+-- data AMove = AMove {
+-- size  :: Size
+-- , path  :: Word64
+-- , cache :: Cache
+-- } deriving (Eq,Show )
+
+consM :: Cache -> (Cache, [AMove]) -> (Cache, [AMove])
+consM c (c', mvs) = (c <> c', consM' c <$> mvs)
+
+consM' :: Cache -> AMove -> AMove
+consM' c AMove{..} = AMove size path (c <> cache)
+
+append :: Monoid m => (Cache, m) -> (Cache, m) -> (Cache, m)
+append (c1, m1) (c2, m2)
+  | c1 > c2   = (c1, m1)
+  | c2 > c1   = (c2, m2)
+  | otherwise = (c1, m1 <> m2)
+
+-------------------------------
+-- Jump Move Human Types
+
+data Point = Point {
+   cell :: Word64 , eat  :: Cache 
+  } deriving (Eq, Show) 
+
+type Path = NonEmpty Point 
+
+data HMove = HMove {
+    siz    :: Size
+  , root   :: Word64
+  , forest :: Path
+  } deriving (Eq, Show) 
+
+consH :: Cache -> Word64 -> (Cache, [Path]) -> (Cache,[Path]) 
+consH eat x (c,p) = (eat <> c, (Point x eat <|) <$> p) 
+
+---------------------
+-- -------- Jump Pawn Moves
+
+cjumpawnmove :: Turn -> Word64 -> Board -> (Cache, [AMove])
+cjumpawnmove turn n board = start n mempty
+  where
+    start i m =
+      case (leftEat board i turn, rightEat board i turn) of
+        ((_,0),(_,0))     -> mempty
+        ((_,0),(c,t))     -> consM m $ go t c
+        ((c,t),(_,0))     -> consM m $ go t c
+        ((c1,t1),(c2,t2)) -> consM m (go t1 c1 `append` go t2 c2)
+
+    go i m =
+      case (leftEat board i turn, rightEat board i turn) of
+        ((_,0),(_,0))     -> (m, [AMove Pawn (n .|. i) m])
+        ((_,0),(c,t))     -> consM m $ go t c
+        ((c,t),(_,0))     -> consM m $ go t c
+        ((c1,t1),(c2,t2)) -> consM m (go t1 c1 `append` go t2 c2)
+
+
+hjumpawnmove :: Word64 -> Board -> (Cache, [HMove])
+hjumpawnmove n board = start n (mempty :: Cache)
+  where
+    start i m =
+      case (leftEat board i Human, rightEat board i Human) of
+        ((_,0),(_,0))     -> mempty -- :: (Cache,[HMove])
+        ((_,0),(c,t))     -> fmap (HMove Pawn i) <$> go t c
+        ((c,t),(_,0))     -> fmap (HMove Pawn i) <$> go t c
+        ((c1,t1),(c2,t2)) -> fmap (HMove Pawn i) <$> (go t1 c1 `append` go t2 c2)
+
+    go i m = 
+      case (leftEat board i Human, rightEat board i Human) of
+        ((_,0),(_,0))     -> (m, [Point i m :| []])
+        ((_,0),(c,t))     -> consH m i $ go t c
+        ((c,t),(_,0))     -> consH m i $ go t c
+        ((c1,t1),(c2,t2)) -> consH m i (go t1 c1 `append` go t2 c2)
+
+---------------------
+---- Directional Steps
+
+
+leftUpEat :: Board -> Word64 -> (Cache, Word64)
+leftUpEat b@Board{..} n
+  | j .&. downkings /= 0
+  , i .&. es         /= 0 = (Cache 0 j, i)
+  | j .&. downpawns /= 0
+  , i .&. es         /= 0 = (Cache j 0, i)
+  | otherwise             = (mempty,0)
+  where j  = n `shiftL` 4
+        i  = j `shiftL` 4
+        es = empties b
+
+rightUpEat :: Board -> Word64 -> (Cache, Word64)
+rightUpEat b@Board{..} n
+  | j .&. downkings /= 0
+  , i .&. es         /= 0 = (Cache 0 j, i)
+  | j .&. downpawns /= 0
+  , i .&. es         /= 0 = (Cache j 0, i)
+  | otherwise             = (mempty,0)
+  where j  = n `shiftL` 5
+        i  = j `shiftL` 5
+        es = empties b
+
+leftDownEat :: Board -> Word64 -> (Cache, Word64)
+leftDownEat b@Board{..} n
+  | j .&. upkings /= 0
+  , i .&. es         /= 0 = (Cache 0 j, i)
+  | j .&. uppawns /= 0
+  , i .&. es         /= 0 = (Cache j 0, i)
+  | otherwise             = (mempty,0)
+  where j  = n `shiftR` 5
+        i  = j `shiftR` 5
+        es = empties b
+
+rightDownEat :: Board -> Word64 -> (Cache, Word64)
+rightDownEat b@Board{..} n
+  | j .&. upkings /= 0
+  , i .&. es         /= 0  = (Cache 0 j, i)
+  | j .&. uppawns /= 0
+  , i .&. es         /= 0  = (Cache j 0, i)
+  | otherwise              = (mempty,0)
+  where j  = n `shiftR` 4
+        i  = j `shiftR` 4
+        es = empties b
+
+leftEat :: Board -> Word64 -> Turn -> (Cache, Word64)
+leftEat board i = \case
+  Human    -> leftUpEat   board i
+  Computer -> leftDownEat board i
+
+rightEat :: Board -> Word64 -> Turn -> (Cache, Word64)
+rightEat board i = \case
+  Human    -> rightUpEat   board i
+  Computer -> rightDownEat board i
+
+------------------------------------------
+-- ------ King Jump Move
+
+allckingjumpmoves :: Board -> Turn -> (Cache, [AMove])
+allckingjumpmoves b@Board{..} turn =
+  if kgs == 0 then (mempty,[]) else go (countTrailingZeros kgs) (popCount kgs)
+  where kgs = case turn of
+                Human    -> upkings
+                Computer -> downkings
+
+        go _ 0 = (mempty, [])
+        go !i !n | testBit kgs i = kingJumpMove turn (bit i) b `append` go (i + 1) (n - 1)
+                 | otherwise     = go (i + 1) n
+
+allckingjumpmoves' :: [Word64] -> Board -> Turn -> (Cache, [AMove])
+allckingjumpmoves' [] _ _ = mempty
+allckingjumpmoves' (x : xs) board turn = 
+  kingJumpMove turn x board `append` allckingjumpmoves' xs board turn
+
+allhkingjumpmoves :: Board -> (Cache, [HMove])
+allhkingjumpmoves b@Board{..} =
+  if upkings == 0 then (mempty,[]) else go (countTrailingZeros upkings) (popCount upkings)
+  where 
+    go _ 0 = (mempty, [])
+    go !i !n | testBit upkings i = hkingJumpMove (bit i) b `append` go (i + 1) (n - 1)
+             | otherwise            = go (i + 1) n
+
+kingJumpMove :: Turn -> Word64 -> Board -> (Cache, [AMove])
+kingJumpMove turn i board = second nub begin
+  where
+    begin = filterNullMap (stops mempty turn i board) [NorthEast ..]
+          & concatFilter (\l@(_, c, _, _) -> apply c (`removeStart` turn) l)
+
+    go c dir board' j = 
+      case stops c turn j board' `filterNullMap` allowedDirections dir of
+        [] -> (mempty, [AMove King (i .|. j) mempty])
+        xs -> concatFilter (\l@(_, c', _, _) -> apply (c' <> c) id l) xs
+  
+    apply c' f (is, c, dir, b) = consM c $ concatFilter (go (c <> c') dir (f b)) is
+
+    removeStart Board{..} = \case
+      Human    -> Board uppawns downpawns (upkings `xor` i) downkings mask
+      Computer -> Board uppawns downpawns upkings (downkings `xor` i) mask
+
+hkingJumpMove :: Word64 -> Board -> (Cache, [HMove])
+hkingJumpMove i board = begin
+  where
+    begin = filterNullMap (stops mempty Human i board) [NorthEast ..]
+          & concatFilter (second (HMove King i <$>) . apply mempty removeStart)
+
+    go c dir board' j = 
+      case stops chr Human j board' `filterNullMap` allowedDirections dir of
+        [] -> (fst c, [Point j (snd c) :| []])
+        xs -> concatFilter (\l@(_, c', _, _) -> consH (snd c) j $ apply (chr <>  c') id l) xs
+      where chr = uncurry (<>) c
+
+    apply c' f (is, c, dir, b) = concatFilter (go (c <> c',c) dir (f b)) is
+
+    removeStart Board{..} = Board uppawns downpawns (upkings `xor` i) downkings mask
+
+untilObstacle :: Turn -> (Word64 -> Word64) -> Word64 -> Board -> Maybe (Word64, Cache)
+untilObstacle Human f n b@Board{..} = 
+  case f n of
+    0 -> Nothing
+    i | i .&. downkings /= 0 -> Just (i, Cache 0 i)
+      | i .&. downpawns /= 0 -> Just (i, Cache i 0)
+      | i .&. es /= 0   -> untilObstacle Human f i b
+      | otherwise       -> Nothing
+  where es    = empties b
+untilObstacle Computer f n b@Board{..} = 
+  case f n of
+    0 -> Nothing
+    i | i .&. upkings /= 0 -> Just (i, Cache 0 i)
+      | i .&. uppawns /= 0 -> Just (i, Cache i 0)
+      | i .&. es /= 0   -> untilObstacle Computer f i b
+      | otherwise       -> Nothing
+  where es    = empties b
+
+rightUpAdj, leftUpAdj, rightDownAdj, leftDownAdj :: Word64 -> Word64
+rightUpAdj   = (`shiftL` 5)
+leftUpAdj    = (`shiftL` 4)
+rightDownAdj = (`shiftR` 4)
+leftDownAdj  = (`shiftR` 5)
+
+diagonal :: Cache -> Turn -> (Word64 -> Word64) -> Word64 -> Board -> ([Word64], Cache)
+diagonal Cache{..} turn f n b =
+  case untilObstacle turn f n b of
+    Nothing     -> ([], mempty)
+    Just (i, c) -> (,c) $
+      unfoldr (\x -> case f x of
+        0 -> Nothing
+        j | j .&. (pawn .|. king) /= 0 -> Nothing
+          | j .&. es /= 0              -> Just (j,j)
+          | otherwise                  -> Nothing
+              ) i
+  where es = empties b
+
+rudiagonal :: Cache -> Turn -> Word64 -> Board -> ([Word64], Cache)
+rudiagonal cache turn = diagonal cache turn rightUpAdj
+
+ludiagonal :: Cache -> Turn -> Word64 -> Board -> ([Word64], Cache)
+ludiagonal cache turn = diagonal cache turn leftUpAdj
+
+rddiagonal :: Cache -> Turn -> Word64 -> Board -> ([Word64], Cache)
+rddiagonal cache turn = diagonal cache turn rightDownAdj
+
+lddiagonal :: Cache -> Turn -> Word64 -> Board -> ([Word64], Cache)
+lddiagonal cache turn = diagonal cache turn leftDownAdj
+
+removeFromBoard :: Cache -> Board -> Turn -> Board
+removeFromBoard Cache{..} Board{..} =
+  \case
+    Human    -> Board uppawns (downpawns `xor` pawn) upkings (downkings `xor` king) mask 
+    Computer -> Board (uppawns `xor` pawn) downpawns (upkings `xor` king) downkings mask
+
+data Direction = NorthEast | NorthWest | SouthWest | SouthEast
+  deriving (Show, Bounded, Eq, Enum)
+
+class (Eq a, Bounded a, Enum a) => Rotate a where
+  next   :: a -> a
+  before :: a -> a
+  around :: a -> [a]
+
+instance Rotate Direction where
+  next   a | a == maxBound = minBound
+           | otherwise     = succ a
+  before a | a == minBound = maxBound
+           | otherwise     = pred a
+  around a = [a .. maxBound] <> init [minBound .. a]
+
+allowedDirections :: Direction -> [Direction]
+allowedDirections dir = [before dir, dir, next dir]
+
+type State = ([Word64], Cache, Direction, Board)
+
+stops :: Cache -> Turn -> Word64 -> Board -> Direction -> State
+stops cache turn i board = \case
+  NorthEast -> let (is, c) = rudiagonal cache turn i board
+               in (is, c, NorthEast, removeFromBoard c board turn)
+  NorthWest -> let (is, c) = ludiagonal cache turn i board
+               in (is, c, NorthWest, removeFromBoard c board turn)
+  SouthEast -> let (is, c) = rddiagonal cache turn i board
+               in (is, c, SouthEast, removeFromBoard c board turn)
+  SouthWest -> let (is, c) = lddiagonal cache turn i board
+               in (is, c, SouthWest, removeFromBoard c board turn)
+
+filterNullMap :: Foldable t => (p -> (t a, b, c, d)) -> [p] -> [(t a, b, c, d)]
+filterNullMap _  [] = []
+filterNullMap f (x : xs)
+  | null (first x') = filterNullMap f xs
+  | otherwise       = x' : filterNullMap f xs
+  where x' = f x
+        first (y, _, _, _) = y
+
+concatFilter :: (Ord b, Foldable t, Monoid b) => (a -> (b, [c])) -> t a -> (b, [c])
+concatFilter f = foldl' h (mempty, [])
+  where h (c, mvs) i
+          | c' > c    = (c', mvs')
+          | c' < c    = (c , mvs )
+          | otherwise = (c, mvs <> mvs')
+          where (c', mvs') = f i
+
+----------------------------
+-- ------ Make Jump Moves
+
+mkJumpMove :: Board -> AMove -> Turn -> Board
+mkJumpMove Board{..} AMove{..}= \case
+  Human    ->
+    case size of 
+      Pawn -> 
+        let newuppawns = uppawns `xor` path `xor` (path .&. upperRow) 
+            newdownpawns = downpawns `xor` pawn cache 
+            newdownkings = downkings `xor` king cache
+            newupkings = upkings .|. (path .&. upperRow)
+        in Board newuppawns newdownpawns newupkings newdownkings mask
+      King ->
+        let newupkings = if popCount path == 1 then upkings else upkings `xor` path
+            newdownpawns = downpawns `xor` pawn cache 
+            newdownkings = downkings `xor` king cache 
+        in Board uppawns newdownpawns newupkings newdownkings mask 
+  Computer ->
+    case size of 
+      Pawn -> 
+        let newdownpawns = downpawns `xor` path `xor` (path .&. lowerRow) 
+            newuppawns = uppawns `xor` pawn cache 
+            newupkings = upkings `xor` king cache
+            newdownkings = downkings .|. (path .&. lowerRow)
+        in Board newuppawns newdownpawns newupkings newdownkings mask
+      King ->
+        let newdownkings = if popCount path == 1 then downkings else downkings `xor` path
+            newuppawns = uppawns `xor` pawn cache 
+            newupkings = upkings `xor` king cache 
+        in Board newuppawns downpawns newupkings newdownkings mask 
+
+rvJumpMove :: AMove -> Board -> Turn -> Board
+rvJumpMove AMove{..} Board{..} = \case
+  Computer ->
+    case size of 
+      Pawn ->
+        let newuppawns = uppawns `xor` path `xor` (path .&. upperRow) 
+            newdownpawns = downpawns .|. pawn cache
+            newdownkings = downkings .|. king cache
+            newupkings = upkings `xor` (path .&. upperRow)
+        in Board newuppawns newdownpawns newupkings newdownkings mask 
+      King -> 
+        let newupkings = if popCount path == 1 then upkings else upkings `xor` path
+            newdownpawns = downpawns .|. pawn cache
+            newdownkings = downkings .|. king cache
+        in Board uppawns newdownpawns newupkings newdownkings mask 
+  Human    ->
+    case size of 
+      Pawn -> 
+        let newdownpawns = downpawns `xor` path `xor` (path .&. lowerRow)
+            newuppawns = uppawns .|. pawn cache
+            newupkings = upkings .|. king cache
+            newdownkings = downkings `xor`(path .&. lowerRow)
+        in Board newuppawns newdownpawns newupkings newdownkings mask 
+      King -> 
+        let newdownkings = if popCount path == 1 then downkings else downkings `xor` path
+            newuppawns = uppawns .|. pawn cache
+            newupkings = upkings .|. king cache
+        in Board newuppawns downpawns newupkings newdownkings mask
+-----------------------------
+-- ------ All Moves
+
+allcpawnjumps :: Board -> Turn -> (Cache,[AMove])
+allcpawnjumps board@Board{..} Computer = 
+  if downpawns == 0 then mempty 
+    else concatFilter (flip (cjumpawnmove Computer) board) $ simpleJumpPawns board Computer
+allcpawnjumps board@Board{..} Human = 
+  if uppawns == 0 then mempty 
+    else concatFilter (flip (cjumpawnmove Human) board) $ simpleJumpPawns board Human
+
+allhpawnjumps :: Board -> (Cache, [HMove])
+allhpawnjumps board = 
+  concatFilter (`hjumpawnmove` board) $ simpleJumpPawns board Human
+
+simpleJumpPawns :: Board -> Turn -> [Word64] -- gets the positions of possible pawn jump moves
+simpleJumpPawns b@Board{..} = \case
+  Human    ->
+    let leftObstacles  = (uppawns `shiftL` 4) .&. blacks
+        rightObstacles = (uppawns `shiftL` 5) .&. blacks
+        landleft       = (leftObstacles  `shiftL` 4) .&. es
+        landright      = (rightObstacles `shiftL` 5) .&. es
+        ll             = (`shiftR` 8)  <$> decomp landleft
+        lr             = (`shiftR` 10) <$> decomp landright
+    in if (leftObstacles .|. rightObstacles) == 0 || (landleft .|. landright) == 0
+       then []
+       else nub $ ll <> lr
+  Computer ->
+    let leftObstacles  = (downpawns `shiftR` 5) .&. whites
+        rightObstacles = (downpawns `shiftR` 4) .&. whites
+        landleft       = (leftObstacles  `shiftR` 5) .&. es
+        landright      = (rightObstacles `shiftR` 4) .&. es
+        ll             = (`shiftL` 10) <$> decomp landleft
+        lr             = (`shiftL` 8)  <$> decomp landright
+    in if (leftObstacles .|. rightObstacles) == 0 || (landleft .|. landright) == 0
+       then []
+       else nub $ ll <> lr
+  where es = empties b
+        blacks = downpawns .|. downkings
+        whites = uppawns .|. upkings
+
+decomp :: Word64 -> [Word64] --- constant time
+decomp w64 = go (countTrailingZeros w64) (popCount w64)
+  where
+    go _ 0 = []
+    go i n | testBit w64 i = bit i : go (i + 1) (n - 1)
+           | otherwise     = go (i + 1) n
+
+
+data HMoves = SHM (NonEmpty SimpleMove)
+            | JHM (NonEmpty HMove)
+  deriving (Eq, Show)
+
+allcmoves :: Board -> Turn -> Maybe CMoves
+allcmoves board turn =
+  let kmovs = case checkjumps board turn of 
+                [] -> snd $ allcpawnjumps board turn
+                _  -> snd $ allckingjumpmoves board turn `append` allcpawnjumps board turn
+      ksm   = kingSimpleMoves board turn
+      asm   = allSimpleMoves  board turn
+  in case kmovs of
+      [] -> SCM <$> N.nonEmpty (asm <> ksm)
+      xs -> Just $ JCM $ N.fromList $ xs
+
+allcmoves' :: Board -> Turn -> Maybe CMoves
+allcmoves' board turn =
+  let kmovs = snd $ allckingjumpmoves board turn `append` allcpawnjumps board turn
+      ksm   = kingSimpleMoves board turn
+      asm   = allSimpleMoves  board turn
+  in case kmovs of
+      [] -> SCM <$> N.nonEmpty (asm <> ksm)
+      xs -> Just $ JCM $ N.fromList $ xs
+
+allhmoves :: Board -> Maybe HMoves
+allhmoves board =
+  let kmovs = snd $ allhkingjumpmoves board `append` allhpawnjumps board 
+      ksm   = kingSimpleMoves board Human
+      asm   = allSimpleMoves  board Human
+  in case kmovs of
+      [] -> SHM <$> N.nonEmpty (asm <> ksm)
+      xs -> Just $ JHM $ N.fromList $ xs
+
+-----------------------------
+-- ------ Game Type
+
+data Result = Loss | Tie
+  deriving (Eq,Show)
+
+data Color = White | Black 
+  deriving (Eq,Show)
+
+otherColor :: Color -> Color 
+otherColor White = Black 
+otherColor Black = White
+
+type Move   = Either SimpleMove AMove
+type LocalH = [Move]                    -- records history for backtrack during alphabeta
+
+data GameType = Real | Simulated        -- represents whether its a move made by a human or made/simulated by 
+                                        -- the computer 
+type family ChangeTurn (gt :: GameType) = (r :: GameType) | r -> gt where
+  ChangeTurn 'Real = 'Simulated 
+  ChangeTurn 'Simulated = 'Real
+
+data SG (gt :: GameType) where
+  SR :: SG 'Real
+  SS :: LocalH -> SG 'Simulated
+
+type Begin = Word64
+type End   = Word64
+
+data IMove = Start HMoves 
+           | MidSimple Size Begin (NonEmpty End) 
+           | MidJump   Size Begin End Cache (NonEmpty Path)
+  deriving (Eq, Show)
+
+data Game (gt :: GameType) where 
+   Over :: { sg     :: SG gt
+           , result :: Result 
+           , oturn  :: Turn
+           , oboard :: Board
+           } -> Game gt 
+   AI   :: { aturn  :: Turn 
+           , aboard :: Board
+           , cmoves :: CMoves
+           , lhisto :: LocalH
+           } -> Game 'Simulated
+   HS   :: { hboard :: Board 
+           , hmoves :: IMove
+           } -> Game 'Real 
+
+instance Eq (Game 'Simulated) where
+  (Over _ r1 t1 b1) == (Over _ r2 t2 b2) = r1 == r2 && t1 == t2 && b1 == b2 
+  (AI t1 b1 c1 l1)  == (AI t2 b2 c2 l2)  = t1 == t2 && b1 == b2 && c1 == c2 && l1 == l2 
+  _ == _  = False  
+
+instance Show (Game gt) where
+  show Over{..} = "result: " <> show result <> " " <> show oturn <> "\n" <> show oboard
+  show AI{..}   = show aturn  <> "\n" <> show aboard <> "\n" 
+               <> show cmoves <> "\n" <> show lhisto
+  show HS{..}   = show hboard <> "\n" <> show hmoves
+
+instance T.Arbitrary (Game 'Simulated) where
+  arbitrary = do
+    t <- T.arbitrary
+    b <- T.arbitrary
+    let mvs = allcmoves b t
+    case mvs of
+      Nothing -> return $ Over (SS []) Loss t b
+      Just mv -> return $ AI t b mv []
+
+-------------------------------
+------- Existential Game (can't know statically who goes first)
+
+data Dimensions = Dimensions {
+    screendimensions :: (Int,Int) 
+  , windowdimensions :: (Int,Int)
+  , celldimensions   :: Float 
+  , translation      :: (Int,Int)
+  } deriving Show
+
+getdimensionsfromenv :: IO Dimensions 
+getdimensionsfromenv = do 
+  screensize <- E.getScreenSize
+  let windim  = bimap width height screensize 
+      transl  = (negate $ fst windim `div` 2, negate $ snd windim `div` 2)
+      celldim = fromIntegral (3 * uncurry min windim) /4 / 8
+  return $ Dimensions screensize windim celldim transl 
+
+width :: Int -> Int 
+width w = 2 * w `div` 3 
+
+height = width
+
+nulldim :: Dimensions 
+nulldim = Dimensions (0,0) (0,0) 0 (0,0)
+
+data Nat = Zero | Succ Nat 
+
+data Vec (n :: Nat) (a :: Type) where 
+  Nil  :: Vec 'Zero a 
+  Cons :: a -> Vec n a -> Vec ('Succ n) a 
+
+vectolist :: Vec n a -> [a]
+vectolist Nil        = []
+vectolist (Cons a v) = a : vectolist v
+
+instance Show a => Show (Vec n a) where 
+  show vec  = show $ vectolist vec
+
+data GlobalH n m = ZipVec (Vec n Move) (Vec m Move)
+  deriving Show 
+
+nullhistory :: GlobalH 'Zero 'Zero 
+nullhistory = ZipVec Nil Nil 
+
+nforward :: Move -> GlobalH n m -> GlobalH ('Succ n) m 
+nforward move (ZipVec v u) = ZipVec (Cons move v) u
+
+rforward :: GlobalH n ('Succ m) -> GlobalH ('Succ n) m 
+rforward (ZipVec v (Cons x u)) = ZipVec (Cons x v) u  
+
+backward :: GlobalH ('Succ n) m -> GlobalH n ('Succ m)
+backward (ZipVec (Cons x v) u) = ZipVec v (Cons x u)
+
+data RealGame gt n m where 
+  RG :: { color  :: Color
+        , dims   :: Dimensions
+        , game   :: Game gt
+        , ghisto :: GlobalH n m 
+        } -> RealGame gt n m 
+
+instance Show (RealGame gt n m) where 
+  show RG{..} = show game <> "\n" <> show ghisto
+
+data EGame where 
+  MkEGame :: RealGame gt n m -> EGame 
+
+instance Show EGame where
+  show (MkEGame rg) = show rg 
+
+
+--------------------------------
+----------- Test Games
+
+initialGame :: Game 'Simulated
+initialGame = AI Human initialboard (fromJust $ allcmoves initialboard Human) []
+
+initialHGame :: Game 'Real 
+initialHGame = HS initialboard (Start $ fromJust $ allhmoves initialboard) 
+
+initialRealGame :: RealGame 'Simulated 'Zero 'Zero 
+initialRealGame = RG White nulldim initialGame (ZipVec Nil Nil)
+
+initialRealHGame :: RealGame 'Real 'Zero 'Zero 
+initialRealHGame =  RG White nulldim initialHGame (ZipVec Nil Nil) 
+
+testKingJumpHGame :: Game 'Real 
+testKingJumpHGame = HS testKingJumpBoard (Start $ fromJust $ allhmoves testKingJumpBoard)
+
+testKingJumpHRealGame :: RealGame 'Real 'Zero 'Zero 
+testKingJumpHRealGame = RG White nulldim testKingJumpHGame (ZipVec Nil Nil) 
+
+testErrorGame :: Game 'Simulated 
+testErrorGame = AI Computer testErrorBoard (fromJust $ allcmoves testErrorBoard Computer) []
+
+testErrorGame2 :: Game 'Simulated 
+testErrorGame2 = AI Human testErrorBoard2 (fromJust $ allcmoves testErrorBoard2 Human) []
+
+testErrorGame3 :: Game 'Simulated 
+testErrorGame3 = AI Computer testErrorBoard3 (fromJust $ allcmoves testErrorBoard3 Computer) []
+
+testAlphaBetaGame :: Game 'Simulated 
+testAlphaBetaGame = AI Human testAlphaBetaError (fromJust $ allcmoves testAlphaBetaError Human) []
+
+testAlphaBetaGame2 :: Game 'Simulated 
+testAlphaBetaGame2 = AI Computer testAlphaBetaError2 (fromJust $ allcmoves testAlphaBetaError2 Computer) []
+
+testgame :: RealGame 'Real 'Zero 'Zero 
+testgame = RG White nulldim (HS testboard (Start $ fromJust $ allhmoves testboard)) nullhistory
+
+testgame2 :: Dimensions -> RealGame 'Simulated 'Zero 'Zero 
+testgame2 dims = RG White dims (AI Computer testgalo (fromJust $ allcmoves testgalo Computer) []) nullhistory
+
+testGaloGame :: Game 'Simulated 
+testGaloGame = AI Computer testgalo (fromJust $ allcmoves testgalo Computer) []
+
+
+
+
+testmatch :: Dimensions -> Match 
+testmatch = Game . MkEGame . testgame2 
+
+
+teststep1 :: EGame 
+teststep1 = imove (bit 33) testgame 
+
+teststep2 :: EGame 
+teststep2 = case teststep1 of 
+              MkEGame g@(RG _ _ (HS _ _) _) -> imove (bit 13) g             
+    
+              
+
+
+
+------------------------------
+---------------- Evolve/Devolve game 
+
+nextSimpleGame :: Board -> LocalH -> Turn -> SimpleMove -> Game 'Simulated
+nextSimpleGame board lh turn smove =
+  let newboard = mkSimpleMove smove board turn
+      newmoves = allcmoves newboard newturn
+      newturn  = changeturn turn
+  in case newmoves of 
+      Nothing -> Over { sg     = SS (Left smove : lh)
+                      , result = Loss
+                      , oturn  = newturn 
+                      , oboard = newboard
+                      }
+      Just mv -> AI   { aturn  = newturn 
+                      , aboard = newboard
+                      , cmoves = mv 
+                      , lhisto = (Left smove : lh)
+                      }
+
+nextJumpGame :: Board -> LocalH -> Turn -> AMove -> Game 'Simulated
+nextJumpGame board lh turn amove =
+  let newboard = mkJumpMove board amove turn
+      newmoves = allcmoves newboard newturn
+      newturn  = changeturn turn
+  in case newmoves of 
+      Nothing -> Over { sg     = SS (Right amove : lh)
+                      , result = Loss
+                      , oturn  = newturn 
+                      , oboard = newboard
+                      }
+      Just mv -> AI   { aturn  = newturn 
+                      , aboard = newboard
+                      , cmoves = mv 
+                      , lhisto = (Right amove : lh)
+                      }
+
+extendGames :: Game 'Simulated -> NonEmpty (Game 'Simulated)
+extendGames o@Over{} = o :| []
+extendGames AI{..}   =
+  case cmoves of
+    SCM smoves -> (nextSimpleGame aboard lhisto aturn) <$> smoves
+    JCM amoves -> (nextJumpGame   aboard lhisto aturn) <$> amoves
+
+
+
+
+
+devolveGame :: Game 'Simulated -> Game 'Simulated
+devolveGame o@Over{..} = 
+  case sg of 
+    SS []       -> trace "In principle this may only happen in testing: (1)" o 
+    SS (x : xs) ->
+      case x of 
+        Left smove -> 
+          let newboard = rvSimpleMove smove oboard oturn 
+              newturn  = changeturn oturn
+              newmoves = allcmoves newboard newturn 
+          in case newmoves of
+            Nothing -> trace "In principle this never happens: (2)" 
+                       Over { sg     = SS xs 
+                            , result = Loss
+                            , oturn  = newturn 
+                            , oboard = newboard 
+                            }
+            Just mv -> AI   { aturn  = newturn 
+                            , aboard = newboard
+                            , cmoves = mv 
+                            , lhisto = xs
+                            }
+        Right amove -> 
+          let newboard = rvJumpMove amove oboard oturn 
+              newturn  = changeturn oturn 
+              newmoves = allcmoves newboard newturn 
+          in case newmoves of 
+            Nothing -> trace "In principle this never happens: (3)" 
+                       Over { sg     = SS xs 
+                            , result = Loss
+                            , oturn  = newturn 
+                            , oboard = newboard 
+                            }
+            Just mv -> AI   { aturn  = newturn 
+                            , aboard = newboard
+                            , cmoves = mv 
+                            , lhisto = xs
+                            }
+devolveGame g@AI{..} = 
+  case lhisto of 
+    []       -> g 
+    (x : xs) -> 
+      case x of 
+        Left smove -> 
+          let newboard = rvSimpleMove smove aboard aturn 
+              newturn  = changeturn aturn
+              newmoves = allcmoves newboard newturn 
+          in case newmoves of 
+            Nothing -> trace "In principle this never happens: (4)" 
+                       Over { sg     = SS xs 
+                            , result = Loss
+                            , oturn  = newturn 
+                            , oboard = newboard 
+                            }
+            Just mv -> AI   { aturn  = newturn 
+                            , aboard = newboard
+                            , cmoves = mv 
+                            , lhisto = xs
+                            }
+        Right amove -> 
+          let newboard = rvJumpMove amove aboard aturn 
+              newturn  = changeturn aturn 
+              newmoves = allcmoves newboard newturn 
+          in case newmoves of 
+            Nothing -> trace "In principle this never happens (5)" 
+                       Over { sg     = SS xs 
+                            , result = Loss
+                            , oturn  = newturn 
+                            , oboard = newboard 
+                            }
+            Just mv -> AI   { aturn  = newturn 
+                            , aboard = newboard
+                            , cmoves = mv 
+                            , lhisto = xs
+                            }
+
+---------------------------
+-------- Alpha Beta
+
+
+getturn :: Game 'Simulated -> Turn 
+getturn Over{..} = oturn 
+getturn AI{..}   = aturn
+
+getboard :: Game 'Simulated -> Board 
+getboard Over{..} = oboard 
+getboard AI{..}   = aboard
+
+alphabeta :: Int -> Game 'Simulated -> Game 'Simulated 
+alphabeta n game = snd $ maxValue n (-32) 32 game
+-- case getturn game of
+-- Computer -> snd $ maxValue n minBound maxBound game
+-- Human    -> snd $ minValue n minBound maxBound game
+  where 
+    maxValue :: Int -> Int -> Int -> Game 'Simulated -> (Int, Game 'Simulated)
+    maxValue _ _ _ g@Over{..} = 
+      case result of 
+        Loss -> (-100, g)
+        Tie  -> (0       , g)
+    maxValue depth a b g@AI{..} = 
+      case depth of 
+        0 -> (utility aboard, g)
+        _ -> 
+          let nextGames = N.sortWith (utility . getboard) $ extendGames g 
+              
+              getMinmaxAndAlpha (bestMinmaxSofar, a') g' = 
+                let (newMinmax, nextGame) = bestMinmaxSofar `max'` minValue (depth - 1) a' b g'
+                in  ((newMinmax, nextGame), a `max` newMinmax)
+             
+              (best, _) = 
+                takeFirstorLast (\(v,_) -> fst v >= b) $ 
+                  scanl' getMinmaxAndAlpha ((-2, g), a) nextGames 
+          in best
+
+    minValue :: Int -> Int -> Int -> Game 'Simulated -> (Int, Game 'Simulated)
+    minValue _ _ _ g@Over{..} = 
+      case result of 
+        Loss -> (100, g)
+        Tie  -> (0       , g)
+    minValue depth a b g@AI{..} = 
+      case depth of 
+        0 -> (utility aboard, g)
+        _ -> 
+          let nextGames = N.sortWith (Down . utility . getboard) $  extendGames g 
+          
+              getMinmaxAndBeta (bestMinmaxSofar, b') g' = 
+                let (newMinmax, nextGame) = bestMinmaxSofar `min'` maxValue (depth - 1) a b' g'
+                in  ((newMinmax, nextGame), b `min` newMinmax)
+              
+              (best, _) = 
+                takeFirstorLast (\(v, _) -> fst v <= a) $ 
+                  scanl' getMinmaxAndBeta ((2, g), b) nextGames
+          
+          in best 
+
+utility :: Board -> Int 
+utility Board{..} = (popCount downpawns) + 5 * (popCount downkings) 
+                  - (popCount uppawns) - 5 * (popCount upkings)
+
+scanl' :: Foldable t => (a1 -> a2 -> a1) -> a1 -> t a2 -> NonEmpty a1 
+scanl' f z = N.fromList . scanl f z . Foldable.toList 
+
+min' :: Ord m => (m, a) -> (m, a) -> (m, a) 
+min' (x, g1) (y, g2) | x < y     = (x, g1)
+                     | otherwise = (y, g2) 
+
+max' :: Ord m => (m, a) -> (m, a) -> (m, a) 
+max' (x, g1) (y, g2) | x > y     = (x, g1) 
+                     | otherwise = (y, g2) 
+
+takeFirstorLast :: (a -> Bool) -> NonEmpty a -> a 
+takeFirstorLast _    (x :| []) = x 
+takeFirstorLast cond (x :| xs) = if cond x then x else takeFirstorLast cond (N.fromList xs)
+
+backtrack :: RealGame 'Simulated n m -> RealGame 'Real ('Succ n) m 
+backtrack (RG color dims g@Over{..} gh) = 
+  case sg of 
+    SS []      -> error "This might happen" 
+    SS [x]     -> RG color dims (toReal g) (nforward x gh)
+    SS (_ : _) -> trace "D" $ backtrack $ RG color dims (devolveGame g) gh
+backtrack (RG color dims g@AI{..} gh)   = 
+  case lhisto of 
+    []         -> error "this should never happen"
+    [x]        -> RG color dims (toReal g) (nforward x gh)
+    (_ : _)    -> backtrack $ RG color dims (devolveGame g) gh
+
+toReal :: Game 'Simulated -> Game 'Real 
+toReal Over{..} = Over SR result oturn oboard 
+toReal AI{..}   = case allhmoves aboard of 
+                        Nothing  -> Over SR Loss aturn aboard 
+                        Just mvs -> HS aboard $ Start mvs
+
+---------------------------
+------ Iterative Deepening 
+
+iterativedeepening :: Int -> RealGame 'Simulated n m -> IO (RealGame 'Real ('Succ n) m)
+iterativedeepening i g@RG{..}
+  | single g' = return $ backtrack $ RG color dims (N.head g') ghisto
+  | otherwise = do
+    ior <- newIORef g
+    withAsync (iterative 1 25 g ior) $ \a1 ->
+      withAsync (threadDelay i) $ \a2 ->
+        race_ (wait a1) (wait a2)
+    backtrack <$> readIORef ior
+  where g' = extendGames game
+
+iterative :: Int -> Int -> RealGame 'Simulated n m  -> IORef (RealGame 'Simulated n m) -> IO ()
+iterative _ _ (RG _ _ Over{} _)  _ = return ()
+iterative i e g irg
+  | i > e     = return ()
+  | otherwise = do 
+    print i 
+    let !newgame         = alphabeta i (game g)
+        newrgame !RG{..} = RG color dims newgame ghisto 
+    modifyIORef' irg newrgame 
+    iterative (i + 1) e g irg
+  where newgame         = alphabeta i (game g)
+        newrgame RG{..} = RG color dims newgame ghisto 
+
+single :: NonEmpty a -> Bool
+single (_ :| []) = True
+single _         = False
+
+---------------------------
+------ Go back/forward 
+
+undo :: RealGame 'Real ('Succ ('Succ n)) m -> RealGame 'Real n ('Succ ('Succ m))
+undo = goback . goback 
+
+redo :: RealGame 'Real n ('Succ ('Succ m)) -> RealGame 'Real ('Succ ('Succ n)) m 
+redo = goforward . goforward 
+
+goback :: RealGame gt ('Succ n) m -> RealGame (ChangeTurn gt) n ('Succ m) 
+goback RG{..} = 
+  case game of 
+    HS{..}   -> 
+      case ghisto of 
+        zv@(ZipVec (Cons (Left  sm) _) _) -> 
+          let newboard = rvSimpleMove sm hboard Computer
+              newmoves = allcmoves newboard Human
+          in case newmoves of 
+              Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (backward zv) 
+              Just mv -> RG color dims (AI Computer newboard mv []) (backward zv) 
+        zv@(ZipVec (Cons (Right am) _) _) ->  
+          let newboard = rvJumpMove am hboard Computer
+              newmoves = allcmoves newboard Human
+          in case newmoves of 
+               Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (backward zv)
+               Just mv -> RG color dims (AI Computer newboard mv []) (backward zv)
+    AI{..}   -> 
+      case ghisto of 
+        zv@(ZipVec (Cons (Left  sm) _) _) -> 
+          let newboard = rvSimpleMove sm aboard aturn
+              newmoves = allhmoves newboard 
+          in case newmoves of 
+              Nothing -> RG color dims (Over SR Loss Human newboard) (backward zv) 
+              Just mv -> RG color dims (HS newboard $ Start mv) (backward zv) 
+        zv@(ZipVec (Cons (Right am) _) _) ->  
+          let newboard = rvJumpMove am aboard aturn
+              newmoves = allhmoves newboard 
+          in case newmoves of 
+               Nothing -> RG color dims (Over SR Loss Human newboard) (backward zv)
+               Just mv -> RG color dims (HS newboard $ Start mv) (backward zv)
+    Over{..} -> 
+      case sg of 
+        SR ->  
+         case ghisto of 
+            zv@(ZipVec (Cons (Left  sm) _) _) -> 
+              let newboard = rvSimpleMove sm oboard Computer
+                  newmoves = allcmoves newboard Human
+              in case newmoves of 
+                  Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (backward zv)
+                  Just mv -> RG color dims (AI Computer newboard mv []) (backward zv)
+            zv@(ZipVec (Cons (Right am) _) _) ->  
+              let newboard = rvJumpMove am oboard Computer
+                  newmoves = allcmoves newboard Human
+              in case newmoves of 
+                   Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (backward zv)
+                   Just mv -> RG color dims (AI Computer newboard mv []) (backward zv)
+        SS _-> 
+          case ghisto of 
+            zv@(ZipVec (Cons (Left  sm) _) _) -> 
+              let newboard = rvSimpleMove sm oboard oturn
+                  newturn  = changeturn oturn
+                  newmoves = allhmoves newboard 
+              in case newmoves of 
+                  Nothing -> RG color dims (Over SR Loss newturn newboard) (backward zv)
+                  Just mv -> RG color dims (HS newboard $ Start mv) (backward zv)
+            zv@(ZipVec (Cons (Right am) _) _) ->  
+              let newboard = rvJumpMove am oboard oturn
+                  newturn  = changeturn oturn
+                  newmoves = allhmoves newboard 
+              in case newmoves of 
+                   Nothing -> RG color dims (Over SR Loss newturn newboard) (backward zv)
+                   Just mv -> RG color dims (HS newboard $ Start mv) (backward zv)
+
+          
+goforward :: RealGame gt n ('Succ m) -> RealGame (ChangeTurn gt) ('Succ n) m 
+goforward RG{..} = 
+  case game of 
+    HS{..}   -> 
+      case ghisto of 
+        zv@(ZipVec _ (Cons (Left  sm) _)) -> 
+          let newboard = mkSimpleMove sm hboard Computer
+              newmoves = allcmoves newboard Human
+          in case newmoves of 
+              Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (rforward zv) 
+              Just mv -> RG color dims (AI Computer newboard mv []) (rforward zv) 
+        zv@(ZipVec _ (Cons (Right am) _)) ->  
+          let newboard = mkJumpMove hboard am Computer
+              newmoves = allcmoves newboard Human
+          in case newmoves of 
+               Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (rforward zv)
+               Just mv -> RG color dims (AI Computer newboard mv []) (rforward zv)
+    AI{..}   -> 
+      case ghisto of 
+        zv@(ZipVec _ (Cons (Left  sm) _)) -> 
+          let newboard = mkSimpleMove sm aboard aturn
+              newmoves = allhmoves newboard 
+          in case newmoves of 
+              Nothing -> RG color dims (Over SR Loss Human newboard) (rforward zv) 
+              Just mv -> RG color dims (HS newboard $ Start mv) (rforward zv) 
+        zv@(ZipVec _ (Cons (Right am) _)) ->  
+          let newboard = mkJumpMove aboard am aturn
+              newmoves = allhmoves newboard 
+          in case newmoves of 
+               Nothing -> RG color dims (Over SR Loss Human newboard) (rforward zv)
+               Just mv -> RG color dims (HS newboard $ Start mv) (rforward zv)
+    Over{..} -> 
+      case sg of 
+        SR ->  
+         case ghisto of 
+            zv@(ZipVec _ (Cons (Left  sm) _)) -> 
+              let newboard = mkSimpleMove sm oboard Computer
+                  newmoves = allcmoves newboard Human
+              in case newmoves of 
+                  Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (rforward zv)
+                  Just mv -> RG color dims (AI Computer newboard mv []) (rforward zv)
+            zv@(ZipVec _ (Cons (Right am) _)) ->  
+              let newboard = mkJumpMove oboard am Computer
+                  newmoves = allcmoves newboard Human
+              in case newmoves of 
+                   Nothing -> RG color dims (Over (SS []) Loss Computer newboard) (rforward zv)
+                   Just mv -> RG color dims (AI Computer newboard mv []) (rforward zv)
+        SS _-> 
+          case ghisto of 
+            zv@(ZipVec _ (Cons (Left  sm) _))  -> 
+              let newboard = mkSimpleMove sm oboard oturn
+                  newturn  = changeturn oturn
+                  newmoves = allhmoves newboard 
+              in case newmoves of 
+                  Nothing -> RG color dims (Over SR Loss newturn newboard) (rforward zv)
+                  Just mv -> RG color dims (HS newboard $ Start mv) (rforward zv)
+            zv@(ZipVec _ (Cons (Right am) _)) ->  
+              let newboard = mkJumpMove oboard am oturn
+                  newturn  = changeturn oturn
+                  newmoves = allhmoves newboard 
+              in case newmoves of 
+                   Nothing -> RG color dims (Over SR Loss newturn newboard) (rforward zv)
+                   Just mv -> RG color dims (HS newboard $ Start mv) (rforward zv)
+
+--------------------------
+-- Interactive Move 
+
+
+imove :: Word64 -> RealGame 'Real m n -> EGame 
+imove _ rg@(RG _ _ Over{} _ )        = MkEGame rg
+imove n rg@(RG color dims HS{..} gh) = 
+  case hmoves of 
+    Start (SHM sms) -> 
+      let clean :: [(Size, [Word64])]
+          clean = N.filter ((==2) . length . snd) $ fmap (second decomp) sms  
+      in case filter ((==n) .  head . snd ) clean of 
+           [] -> traceShow clean $  MkEGame rg 
+           xs -> MkEGame $ RG color dims (HS hboard (MidSimple sz n $ N.fromList nl)) gh 
+            where sz = fst $ head xs
+                  nl = map (snd . second (!! 1)) xs 
+    Start (JHM sjs) -> 
+      case N.filter ((==n) . root) sjs of 
+        [] -> MkEGame rg 
+        xs -> MkEGame $ RG color dims (HS hboard (MidJump sz n n mempty pt)) gh
+          where sz = siz $ head xs 
+                pt = N.fromList $ fmap forest xs
+    MidSimple sz begin ends   -> 
+      case find (n==) ends of 
+        Nothing -> MkEGame rg 
+        Just e  -> 
+          let newboard = mkSimpleMove (sz, begin .|. e) hboard Human 
+          in case allcmoves newboard Computer of 
+               Nothing -> MkEGame 
+                        $ RG color dims (Over (SS []) Loss Computer newboard) 
+                        $ nforward (Left (sz, begin .|. e)) gh
+               Just mv -> MkEGame 
+                        $ RG color dims (AI Computer newboard mv []) 
+                        $ nforward (Left (sz, begin .|. e)) gh
+    MidJump sz begin x c paths -> 
+      let next = N.filter ((==n) . cell . N.head) paths 
+      in case next of 
+        [] -> MkEGame rg 
+        xs -> 
+          let parts = N.fromList $ N.uncons <$> xs 
+              point = N.head $ fst <$> parts 
+              rest  = snd <$> parts 
+          in case sequence rest of 
+              Nothing -> 
+                let newboard = jump (x .|. cell point) (eat point) hboard sz
+                    mvs      = allcmoves newboard Computer
+                    newG     = Right (AMove sz (begin .|. cell point) (eat point <> c)) 
+                in case mvs of 
+                    Nothing -> MkEGame $ RG color dims (Over (SS []) Loss Computer newboard) $ nforward newG gh 
+                    Just ms -> MkEGame $ RG color dims (AI Computer newboard ms [] ) $ nforward newG gh
+              Just xss -> 
+                let newboard = jump (x .|. cell point) (eat point) hboard sz 
+                    chr      = c <> eat point 
+                in MkEGame $ RG color dims (HS newboard (MidJump sz begin (cell point) chr xss)) gh 
+
+jump :: Word64 -> Cache -> Board -> Size -> Board 
+jump path Cache{..} Board {..} = \case
+  Pawn -> 
+    let newuppawns = uppawns `xor` path `xor` (path .&. upperRow) 
+        newdownpawns = downpawns `xor` pawn 
+        newdownkings = downkings `xor` king
+        newupkings = upkings .|. (path .&. upperRow)
+    in Board newuppawns newdownpawns newupkings newdownkings mask
+  King -> 
+    let newupkings = upkings `xor` path
+        newdownpawns = downpawns `xor` pawn
+        newdownkings = downkings `xor` king 
+    in Board uppawns newdownpawns newupkings newdownkings mask 
+
+-----------------------------------------
+---- Rendering 
+-- (1) Colors 
+
+noncellcolor :: G.Color 
+noncellcolor = G.makeColorI 189 159 128 255 
+
+playingcellcolor :: G.Color 
+playingcellcolor = G.makeColorI 94 68 43 255 
+
+whitecolor :: G.Color 
+whitecolor = G.makeColorI 226 207 188 255 
+
+kingwhitecolor :: G.Color
+kingwhitecolor = G.blue 
+
+blackcolor :: G.Color 
+blackcolor = G.makeColorI 30 17 3 255 
+
+kingblackcolor :: G.Color 
+kingblackcolor = G.green
+
+----------------------------------------
+-- Match Type 
+
+data Match = Menu Dimensions 
+           | Game EGame
+  deriving Show
+
+matchstart :: Color -> Dimensions -> IO Match 
+matchstart White ds = 
+    return 
+  $ Game 
+  $ MkEGame 
+  $ RG White ds (HS initialboard (Start $ fromJust $ allhmoves initialboard)) nullhistory
+matchstart Black ds = 
+    return 
+  $ Game 
+  $ MkEGame 
+  $ RG White ds (AI Human initialboard (fromJust $ allcmoves initialboard Human) []) nullhistory
+
+
+
+-----------------------------------------
+-- Render Game 
+
+renderState :: Maybe IMove -> Color -> Dimensions -> Board -> G.Picture 
+renderState ms cr Dimensions{..} board = 
+    G.translate (negate $ celldimensions * 3.5) (negate $ celldimensions * 3.5)
+  $ G.pictures 
+  $ concatMap addToPicture (zip [0..7] $ groupAt 8 [0 .. 63])
+  where addToPicture = row ms cr celldimensions board 
+
+row :: Maybe IMove -> Color -> Float -> Board -> (Int, [Int]) -> [G.Picture]
+row ms cr n Board{..} (y, xs) = map renderCell xs 
+  where 
+    renderCell x 
+      | even (x + y)                   = G.translate x' y' $ nonCell n 
+      | uppawns `testBit` realpoint = G.translate x' y' $ pawnCell n cr
+      | downpawns `testBit` realpoint = G.translate x' y' $ pawnCell n $ otherColor cr 
+      | upkings `testBit` realpoint = G.translate x' y' $ kingCell n cr
+      | downkings `testBit` realpoint = G.translate x' y' $ kingCell n $ otherColor cr
+      | otherwise                      = G.translate x' y' $ emptyCell realpoint n ms
+      where point     = (x `div` 2)
+            realpoint = point + y `div` 2 
+            (x', y')  = (n * fromIntegral (x `mod` 8), n * fromIntegral y)
+
+square :: Float -> G.Picture 
+square f = G.rectangleSolid f f 
+
+pawnCell :: Float -> Color -> G.Picture 
+pawnCell f c = G.pictures $ (G.color playingcellcolor (square f) :) $ (:[]) $ 
+  case c of 
+    White -> G.color whitecolor $ G.thickCircle 0 radius 
+    Black -> G.color blackcolor $ G.thickCircle 0 radius
+    where radius = f * (2 / 3)
+
+kingCell :: Float -> Color -> G.Picture
+kingCell f c = G.pictures $ (G.color playingcellcolor (square f) :) $ (:[]) $ 
+  case c of 
+    White -> G.color kingwhitecolor $ G.thickCircle 0 radius 
+    Black -> G.color kingblackcolor $ G.thickCircle 0 radius
+    where radius = f * (2 / 3)
+
+nonCell :: Float -> G.Picture 
+nonCell f = G.color noncellcolor $ square f 
+
+emptyCell :: Int -> Float -> Maybe IMove -> G.Picture 
+emptyCell i f = \case 
+  Nothing                    -> plaincell 
+  Just (Start _)             -> plaincell 
+  Just (MidSimple _ _ xs)    -> 
+     if isJust $ find (== bit i) xs
+      then nextcell
+      else plaincell 
+  Just (MidJump _ _ _ _ xs) -> 
+     if isJust $ find ((==i) .fromIntegral . cell . N.head) xs
+      then nextcell 
+      else plaincell
+  where plaincell = G.color playingcellcolor $ square f
+        nextcell  = G.Color (G.light playingcellcolor) $ square f 
+
+renderGameOver :: Color -> Dimensions -> Board -> Result -> Turn -> G.Picture 
+renderGameOver c ds@Dimensions{..} brd r t = 
+  G.pictures [ G.translate (-2 * celldimensions) (4.25 * celldimensions)
+             $ G.scale 0.4 0.4 $ G.color G.white $ G.text txt
+             , renderState Nothing c ds brd 
+             , G.translate (- 6.25  * celldimensions) 0 $ G.color G.white $ square celldimensions
+             , G.translate (- 6.525 * celldimensions) (- 0.1 * celldimensions) 
+             $ G.color G.black $ G.scale 0.1 0.1 $ G.text "Menu"
+             ] 
+  where txt = case r of 
+                Loss -> if t == Human then "You Lost" else "You Win"
+                Tie  -> "Tie"  
+
+renderMenu :: Dimensions -> G.Picture
+renderMenu Dimensions{..} = 
+  let white = G.color G.white       $ G.rectangleSolid (celldimensions * 1.5) celldimensions
+      black = G.color (G.greyN 0.5) $ G.rectangleSolid (celldimensions * 1.5) celldimensions
+  in G.translate (- celldimensions) 0 $ G.pictures [white, G.translate (2 * celldimensions) 0 black] 
+ 
+renderGame :: Match -> G.Picture 
+renderGame (Menu ds)  = renderMenu ds
+renderGame (Game (MkEGame RG{..})) = 
+  case game of 
+    Over SR res _ board     -> renderGameOver color dims board res Human 
+    Over (SS _) res _ board -> renderGameOver color dims board res Computer
+    AI{..} -> renderState Nothing color dims aboard
+    HS{..} -> renderState (Just hmoves) color dims hboard
+
+--------------------------
+-- Filter Mouse Clicks 
+
+
+data Click = Cellclick Int | Undoclick | Redoclick | Againclick 
+
+type Cellwidth = Float 
+
+filtermenuclick :: Cellwidth -> (Float,Float) -> Maybe Color 
+filtermenuclick cw pointinscreen = 
+  let mwhite (x,y) = x > (-7 * cw / 4) && x < (- cw / 4) && y > (- cw / 2) && y < (cw / 2)
+      mblack (x,y) = x > (cw / 4) && x < (7 * cw / 4) && y > (- cw / 2) && y < (cw / 2)
+  in if mwhite pointinscreen 
+       then Just White 
+        else if mblack pointinscreen 
+          then Just Black 
+          else Nothing 
+
+filtermouseclick :: Cellwidth -> (Float,Float) -> Maybe Click 
+filtermouseclick cellwidth pointinscreen = 
+  let maybecellclick = Cellclick . toboardnumber <$> playable (both (floor . (/cellwidth)) pointinscreen)
+      playable p@(x,y) | x < (-4) || x > 3 || y < (-4) || y > 3 = Nothing 
+                       | even (x + y)                           = Nothing
+                       | otherwise                              = Just  p 
+      maybeundoclick p | x > 5.75 && x < (-6.75) && y > (-0.5) && y < 0.5 = Just Undoclick
+                       | otherwise = Nothing  
+                       where (x,y) = both (/cellwidth) p 
+      maybeagainclick p | x > (-6.75) && x < (-5.75) && y > (-0.6) && y < 0.4 = Just Againclick
+                        | otherwise                                           = Nothing
+        where (x,y) = both (/cellwidth) p
+  in maybecellclick  <|>  maybeundoclick pointinscreen <|> maybeagainclick pointinscreen
+
+toboardnumber :: (Int,Int) -> Int 
+toboardnumber (x,y) = 
+  let x' = x + 4 
+      y' = y + 4 
+  in  x' `div` 2 + 4 * y' + y' `div` 2
+
+------------------------------------
+---- Event Handler 
+
+type Microseconds = Int 
+
+treshold :: Microseconds 
+treshold = 30_000_000
+
+eventHandler :: G.Event -> Match -> IO Match
+eventHandler (G.EventKey (G.MouseButton G.LeftButton) G.Up _ point) m@(Menu ds@Dimensions{..}) =
+  case filtermenuclick celldimensions point of
+    Nothing    -> return m
+    Just White -> matchstart White ds
+    Just Black -> matchstart Black ds
+eventHandler _ m@(Menu _) = return m
+eventHandler _ (Game (MkEGame g@(RG _ _ AI{} _))) = 
+  Game . MkEGame <$>  iterativedeepening treshold g 
+eventHandler event  g@(Game (MkEGame rg@(RG _ ds Over{..} gh))) = 
+  case sg of 
+    SS _ -> 
+      case event of 
+        G.EventKey (G.MouseButton G.LeftButton) G.Up _ point -> do 
+          let click = filtermouseclick (celldimensions ds) point 
+          case click of 
+            Just Againclick -> return $ Menu ds 
+            Just Undoclick  -> 
+              case gh of 
+                ZipVec (Cons _ _) _ -> return $ Game $ MkEGame $ goback rg 
+                _                   -> return g 
+            _                       -> return g
+        _                           -> return g
+            
+    SR   -> 
+      case event of 
+        G.EventKey (G.MouseButton G.LeftButton) G.Up _ point -> do 
+          let click = filtermouseclick (celldimensions ds) point 
+          case click of 
+            Just Againclick -> return $ Menu ds
+            Just Undoclick  -> 
+              case gh of 
+                ZipVec (Cons _ (Cons _ __)) _ -> return $ Game $ MkEGame $ undo rg 
+                _                   -> return g 
+            _                       -> return g
+        _                           -> return g
+eventHandler event g@(Game (MkEGame rg@(RG _ ds HS{} gh))) = 
+  case event of 
+    G.EventKey (G.MouseButton G.LeftButton) G.Up _ point -> do 
+      let click = filtermouseclick (celldimensions ds) point 
+      case click of 
+        Just (Cellclick i) -> 
+          let j = bit i :: Word64 
+          in return $ Game $ imove j rg
+        Just Undoclick    -> return $ 
+          case gh of 
+            ZipVec (Cons _ (Cons _ _)) _ -> Game $ MkEGame $ undo rg
+            _                            -> g 
+        Just Redoclick -> return $ 
+          case gh of 
+            ZipVec _ (Cons _ (Cons _ _)) -> Game $ MkEGame $ redo rg
+            _                            -> g 
+        _              -> return g
+    _ -> return g
+
+----------------------------
+---- Main 
+
+main :: IO ()
+main = do 
+  ds <- getdimensionsfromenv
+  let Dimensions{..} = ds 
+      xcenter = fst screendimensions `div` 2 + fst translation
+      ycenter = snd screendimensions `div` 2 + snd translation 
+      center  = (xcenter,ycenter)
+      window  = G.InWindow "SpanishCheckers" windowdimensions translation 
+  G.playIO window G.black 0 (testmatch ds) (return . renderGame) eventHandler (const return) 
+
+
+---------------------------------
+-- 
+
+newtype Fix f = Fix (f (Fix f))
+
+deriving instance Show (f (Fix f)) => Show (Fix f)
+
+data Player = Mini | Max 
+
+data GameF a r = Value a | Play Player (NonEmpty r)
+  deriving Functor
+
+data GameN a r = Util a | Go Player (NonEmpty r)
+  deriving Functor
+
+nat :: Int -> Game 'Simulated -> Spiel Int
+nat _ Over{..} = Fix $ Value $ utility oboard
+nat 0 AI{..}   = Fix $ Value $ utility aboard
+nat n g@AI{..} = Fix 
+    $ Play (if aturn == Human then Mini else Max) 
+    $ fmap (nat (n - 1))
+    $ extendGames g
+
+newtype GameWithScore = GameWithScore { unGameWithScore :: (Game 'Simulated, Int) } 
+  deriving Show
+
+instance Eq GameWithScore where
+  gws1 == gws2 = (snd $ unGameWithScore gws1) == (snd $ unGameWithScore gws2)
+
+instance Ord GameWithScore where
+ compare gws1 gws2 = compare (snd $ unGameWithScore gws1) (snd $ unGameWithScore gws2)
+
+nat' :: Int -> Game 'Simulated -> Spiel GameWithScore 
+nat' _ o@Over{..} = Fix $ Value $ GameWithScore (o, utility oboard)
+nat' 0 a@AI{..}   = Fix $ Value $ GameWithScore (a, utility aboard)
+nat' n g@AI{..}   = Fix 
+    $ Play (if aturn == Human then Mini else Max) 
+    $ fmap (nat' (n - 1))
+    $ extendGames g
+
+type Minimax = (First Move, Game 'Simulated)
+
+type Spiel a = Fix (GameF a) 
+
+cata :: (GameF a r -> r) -> Spiel a -> r 
+cata f (Fix g) = f (fmap (cata f) g)
+
+class Lattice l where
+  inf, sup :: l -> l -> l 
+
+newtype Order a = Order {unOrder :: a}
+  deriving (Eq,Ord)
+
+instance Ord a => Lattice (Order a) where
+  inf = min 
+  sup = max 
+
+-- The minimax is parameterized by an embedding leaf :: a -> l of final 
+-- values to the chosen lattice 
+
+gminimax :: Lattice l => (a -> l) -> Spiel a -> l 
+gminimax leaf = cata minimaxF 
+  where 
+    minimaxF (Value x)   = leaf x 
+    minimaxF (Play p xs) = foldr1 (lopti p) xs 
+
+lopti :: Lattice l => Player -> l -> l -> l 
+lopti Mini = inf 
+lopti Max  = sup 
+
+-- the regular minimax uses the scoresa of the game directily as the lattice 
+
+minimax :: Ord a => Spiel a -> a 
+minimax = unOrder . gminimax Order
+
+-- For the alphabeta prunning, the idea is that we can keep track of some bounds
+-- on the optimal score, and this allows us to short-circuit the search.
+-- So the search is parameterized by that interval (alpha,beta). This leads to 
+-- a lattice of functions Interval a -> a 
+
+type Interval a = (WithBot a, WithTop a)
+
+data WithBot a  = Bot | NoBot a deriving (Eq, Ord)
+data WithTop a  = NoTop a | Top deriving (Eq, Ord)
+
+newtype Pruning a = Pruning { unPruning :: Interval a -> a }
+
+clamp :: Ord a => Interval a -> a -> a 
+clamp (l, r) = clampBot l . clampTop r 
+
+clampBot :: Ord a => WithBot a -> a -> a
+clampBot Bot x       = x 
+clampBot (NoBot y) x = max y x
+
+clampTop :: Ord a => WithTop a -> a -> a
+clampTop Top x       = x 
+clampTop (NoTop y) x = min y x 
+
+instance Ord a => Lattice (Pruning a) where
+  inf l r = Pruning (\(alpha,beta) -> 
+    let v1 = unPruning l (alpha, beta) 
+    in if NoBot v1 <= alpha 
+        then v1 
+        else min v1 (unPruning r (alpha, min (NoTop v1) beta))
+                    )
+  sup l r = Pruning (\(alpha,beta) -> 
+    let v1 = unPruning l (alpha,beta) 
+    in if beta <= NoTop v1 
+        then v1 
+        else max v1 (unPruning r (max (NoBot v1) alpha, beta))
+                    )
+
+ab :: Ord a => Spiel a -> a 
+ab = runPruning . gminimax constPruning 
+
+constPruning :: a -> Pruning a 
+constPruning = Pruning . const 
+
+runPruning :: Pruning a -> a 
+runPruning f = unPruning f (Bot, Top)
+ 
+falphabeta :: Int -> Game 'Simulated -> Int 
+falphabeta n = ab . nat n
+
+falphabeta' :: Int -> Game 'Simulated -> GameWithScore 
+falphabeta' n = ab . nat' n
+

@@ -27,6 +27,11 @@ dependencies:
 - extra
 - QuickCheck
 - async
+- mtl  
+- split
+- vector 
+- foldl 
+- linear-base
 
 ghc-options:
 - -Wall
@@ -42,10 +47,6 @@ ghc-options:
 library:
   source-dirs:  
     - src 
-    - src/render
-    - src/general
-    - src/human
-    - src/computer
 
 executables:
   SpanishCheckers-exe:
